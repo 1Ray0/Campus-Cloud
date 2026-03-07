@@ -3,7 +3,6 @@ import logging
 from fastapi import APIRouter
 
 from app.api.deps import CurrentUser, LxcInfoDep, SessionDep
-from app.core.proxmox import get_proxmox_api
 from app.exceptions import ProxmoxError
 from app.schemas import (
     LXCCreateRequest,
@@ -11,7 +10,7 @@ from app.schemas import (
     TemplateSchema,
     TerminalInfoSchema,
 )
-from app.services import provisioning_service
+from app.services import provisioning_service, proxmox_service
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +21,8 @@ router = APIRouter(prefix="/lxc", tags=["lxc"])
 def get_lxc_terminal(vmid: int, container_info: LxcInfoDep):
     """Get terminal access for an LXC container (requires ownership or admin)."""
     try:
-        proxmox = get_proxmox_api()
         node = container_info["node"]
-        console_data = proxmox.nodes(node).lxc(vmid).termproxy.post()
+        console_data = proxmox_service.get_terminal_ticket(node, vmid)
 
         return {
             "vmid": vmid,

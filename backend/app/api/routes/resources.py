@@ -8,10 +8,9 @@ from app.api.deps import (
     ResourceInfoDep,
     SessionDep,
 )
-from app.core.proxmox import get_proxmox_api
 from app.exceptions import ProxmoxError
 from app.schemas import Message, NodeSchema, ResourcePublic, VMSchema
-from app.services import resource_service
+from app.services import proxmox_service, resource_service
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +20,7 @@ router = APIRouter(prefix="/resources", tags=["resources"])
 @router.get("/nodes", response_model=list[NodeSchema])
 def list_nodes(current_user: CurrentUser):
     try:
-        proxmox = get_proxmox_api()
-        return proxmox.nodes.get()
+        return proxmox_service.list_nodes()
     except Exception as e:
         logger.error(f"Failed to get nodes: {e}")
         raise ProxmoxError("Failed to get nodes")

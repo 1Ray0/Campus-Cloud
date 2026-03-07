@@ -4,7 +4,6 @@ import uuid
 from sqlmodel import Session
 
 from app.core.config import settings
-from app.core.proxmox import basic_blocking_task_status, get_proxmox_api
 from app.core.security import decrypt_value
 from app.exceptions import ProxmoxError
 from app.schemas import (
@@ -17,19 +16,17 @@ from app.schemas import (
 )
 from app.repositories import resource as resource_repo
 from app.services import audit_service
+from app.services import proxmox_service
+from app.services.proxmox_service import DEFAULT_NODE
 
 logger = logging.getLogger(__name__)
-
-# TODO: move to settings.PROXMOX_DEFAULT_NODE
-DEFAULT_NODE = "pve"
 
 
 def create_lxc(
     *, session: Session, lxc_data: LXCCreateRequest, user_id: uuid.UUID
 ) -> LXCCreateResponse:
     try:
-        proxmox = get_proxmox_api()
-        vmid = proxmox.cluster.nextid.get()
+        vmid = proxmox_service.next_vmid()
 
         config = {
             "vmid": vmid,
@@ -46,8 +43,7 @@ def create_lxc(
             "pool": "CampusCloud",
         }
 
-        result = proxmox.nodes(DEFAULT_NODE).lxc.create(**config)
-        basic_blocking_task_status(DEFAULT_NODE, result)
+        result = proxmox_service.create_lxc(DEFAULT_NODE, **config)
 
         resource_repo.create_resource(
             session=session,
@@ -85,8 +81,7 @@ def create_vm(
     *, session: Session, vm_data: VMCreateRequest, user_id: uuid.UUID
 ) -> VMCreateResponse:
     try:
-        proxmox = get_proxmox_api()
-        new_vmid = proxmox.cluster.nextid.get()
+        new_vmid = proxmox_service.next_vmid()
 
         clone_config = {
             "newid": new_vmid,
@@ -96,12 +91,9 @@ def create_vm(
             "pool": "CampusCloud",
         }
 
-        result = (
-            proxmox.nodes(DEFAULT_NODE)
-            .qemu(vm_data.template_id)
-            .clone.post(**clone_config)
+        result = proxmox_service.clone_vm(
+            DEFAULT_NODE, vm_data.template_id, **clone_config
         )
-        basic_blocking_task_status(DEFAULT_NODE, result)
 
         config_updates = {
             "cores": vm_data.cores,
@@ -111,15 +103,17 @@ def create_vm(
             "sshkeys": "",
             "ciupgrade": 0,
         }
-        proxmox.nodes(DEFAULT_NODE).qemu(new_vmid).config.put(**config_updates)
+        proxmox_service.update_config(
+            DEFAULT_NODE, new_vmid, "qemu", **config_updates
+        )
 
         if vm_data.disk_size:
-            proxmox.nodes(DEFAULT_NODE).qemu(new_vmid).resize.put(
-                disk="scsi0", size=vm_data.disk_size
+            proxmox_service.resize_disk(
+                DEFAULT_NODE, new_vmid, "qemu", "scsi0", vm_data.disk_size
             )
 
         if vm_data.start:
-            proxmox.nodes(DEFAULT_NODE).qemu(new_vmid).status.start.post()
+            proxmox_service.control(DEFAULT_NODE, new_vmid, "qemu", "start")
 
         resource_repo.create_resource(
             session=session,
@@ -156,8 +150,7 @@ def create_vm(
 
 def provision_from_request(*, session: Session, db_request) -> int:
     """Provision a VM or LXC based on an approved request. Returns VMID."""
-    proxmox = get_proxmox_api()
-    new_vmid = proxmox.cluster.nextid.get()
+    new_vmid = proxmox_service.next_vmid()
     plain_password = decrypt_value(db_request.password)
 
     if db_request.resource_type == "lxc":
@@ -175,8 +168,7 @@ def provision_from_request(*, session: Session, db_request) -> int:
             "start": 1,
             "pool": "CampusCloud",
         }
-        result = proxmox.nodes(DEFAULT_NODE).lxc.create(**config)
-        basic_blocking_task_status(DEFAULT_NODE, result)
+        proxmox_service.create_lxc(DEFAULT_NODE, **config)
 
         resource_repo.create_resource(
             session=session,
@@ -194,12 +186,9 @@ def provision_from_request(*, session: Session, db_request) -> int:
             "storage": settings.PROXMOX_DATA_STORAGE,
             "pool": "CampusCloud",
         }
-        result = (
-            proxmox.nodes(DEFAULT_NODE)
-            .qemu(db_request.template_id)
-            .clone.post(**clone_config)
+        proxmox_service.clone_vm(
+            DEFAULT_NODE, db_request.template_id, **clone_config
         )
-        basic_blocking_task_status(DEFAULT_NODE, result)
 
         config_updates = {
             "cores": db_request.cores,
@@ -209,14 +198,17 @@ def provision_from_request(*, session: Session, db_request) -> int:
             "sshkeys": "",
             "ciupgrade": 0,
         }
-        proxmox.nodes(DEFAULT_NODE).qemu(new_vmid).config.put(**config_updates)
+        proxmox_service.update_config(
+            DEFAULT_NODE, new_vmid, "qemu", **config_updates
+        )
 
         if db_request.disk_size:
-            proxmox.nodes(DEFAULT_NODE).qemu(new_vmid).resize.put(
-                disk="scsi0", size=f"{db_request.disk_size}G"
+            proxmox_service.resize_disk(
+                DEFAULT_NODE, new_vmid, "qemu",
+                "scsi0", f"{db_request.disk_size}G"
             )
 
-        proxmox.nodes(DEFAULT_NODE).qemu(new_vmid).status.start.post()
+        proxmox_service.control(DEFAULT_NODE, new_vmid, "qemu", "start")
 
         resource_repo.create_resource(
             session=session,
@@ -233,12 +225,7 @@ def provision_from_request(*, session: Session, db_request) -> int:
 
 
 def get_lxc_templates() -> list[TemplateSchema]:
-    proxmox = get_proxmox_api()
-    templates = (
-        proxmox.nodes(DEFAULT_NODE)
-        .storage(settings.PROXMOX_ISO_STORAGE)
-        .content.get()
-    )
+    templates = proxmox_service.get_lxc_templates(DEFAULT_NODE)
     return [
         TemplateSchema(
             volid=t["volid"],
@@ -251,10 +238,8 @@ def get_lxc_templates() -> list[TemplateSchema]:
 
 
 def get_vm_templates() -> list[VMTemplateSchema]:
-    proxmox = get_proxmox_api()
-    all_vms = proxmox.cluster.resources.get(type="vm")
+    all_vms = proxmox_service.get_vm_templates()
     return [
         VMTemplateSchema(vmid=vm["vmid"], name=vm["name"], node=vm["node"])
         for vm in all_vms
-        if vm.get("template") == 1
     ]

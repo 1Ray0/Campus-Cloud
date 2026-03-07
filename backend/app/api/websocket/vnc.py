@@ -3,14 +3,14 @@ import logging
 import ssl
 from urllib.parse import quote
 
-import httpx
 import websockets
 from fastapi import WebSocket, WebSocketDisconnect
 
 from app.api.deps.auth import get_ws_current_user
 from app.api.deps.proxmox import check_resource_ownership
 from app.core.config import settings
-from app.core.proxmox import get_proxmox_api
+from app.exceptions import NotFoundError, ProxmoxError
+from app.services import proxmox_service
 
 logger = logging.getLogger(__name__)
 
@@ -31,37 +31,20 @@ async def vnc_proxy(websocket: WebSocket, vmid: int, token: str):
     pve_websocket = None
 
     try:
-        # Get session ticket using password authentication
-        async with httpx.AsyncClient(verify=settings.PROXMOX_VERIFY_SSL) as client:
-            auth_response = await client.post(
-                f"https://{settings.PROXMOX_HOST}:8006/api2/json/access/ticket",
-                data={
-                    "username": settings.PROXMOX_USER,
-                    "password": settings.PROXMOX_PASSWORD,
-                },
-            )
+        # Get session ticket (password-based, required for PVE WebSocket)
+        try:
+            pve_auth_cookie, _ = await proxmox_service.get_session_ticket()
+        except ProxmoxError:
+            logger.error("Proxmox session authentication failed")
+            await websocket.close(code=1008, reason="Authentication failed")
+            return
 
-            if auth_response.status_code != 200:
-                logger.error(
-                    f"Proxmox authentication failed: {auth_response.status_code}"
-                )
-                await websocket.close(code=1008, reason="Authentication failed")
-                return
-
-            auth_data = auth_response.json()["data"]
-            pve_auth_cookie = auth_data["ticket"]
-            logger.info("Retrieved session ticket for VNC WebSocket authentication")
-
-        proxmox = get_proxmox_api()
+        logger.info("Retrieved session ticket for VNC WebSocket authentication")
 
         # Find VM in cluster resources
-        vm_info = None
-        for vm in proxmox.cluster.resources.get(type="vm"):
-            if vm["vmid"] == vmid:
-                vm_info = vm
-                break
-
-        if not vm_info:
+        try:
+            vm_info = proxmox_service.find_resource(vmid)
+        except NotFoundError:
             logger.error(f"VM {vmid} not found in cluster")
             await websocket.close(code=1008, reason="VM not found")
             return
@@ -72,7 +55,7 @@ async def vnc_proxy(websocket: WebSocket, vmid: int, token: str):
         )
 
         # Get VNC proxy ticket
-        console_data = proxmox.nodes(node).qemu(vmid).vncproxy.post(websocket=1)
+        console_data = proxmox_service.get_vnc_ticket(node, vmid)
         vnc_port = console_data["port"]
         vnc_ticket = console_data["ticket"]
 

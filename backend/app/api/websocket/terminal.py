@@ -3,14 +3,14 @@ import logging
 import ssl
 from urllib.parse import quote
 
-import httpx
 import websockets
 from fastapi import WebSocket, WebSocketDisconnect
 
 from app.api.deps.auth import get_ws_current_user
 from app.api.deps.proxmox import check_resource_ownership
 from app.core.config import settings
-from app.core.proxmox import get_proxmox_api
+from app.exceptions import NotFoundError, ProxmoxError
+from app.services import proxmox_service
 
 logger = logging.getLogger(__name__)
 
@@ -31,40 +31,20 @@ async def terminal_proxy(websocket: WebSocket, vmid: int, token: str):
     pve_websocket = None
 
     try:
-        # Get session ticket using password authentication
-        # NOTE: Proxmox termproxy WebSocket does NOT support API token authentication
-        # We must use password to get a session ticket (PVEAuthCookie)
-        async with httpx.AsyncClient(verify=settings.PROXMOX_VERIFY_SSL) as client:
-            auth_response = await client.post(
-                f"https://{settings.PROXMOX_HOST}:8006/api2/json/access/ticket",
-                data={
-                    "username": settings.PROXMOX_USER,
-                    "password": settings.PROXMOX_PASSWORD,
-                },
-            )
+        # Get session ticket (password-based, required for PVE WebSocket)
+        try:
+            pve_auth_cookie, _ = await proxmox_service.get_session_ticket()
+        except ProxmoxError:
+            logger.error("Proxmox session authentication failed")
+            await websocket.close(code=1008, reason="Authentication failed")
+            return
 
-            if auth_response.status_code != 200:
-                logger.error(
-                    f"Proxmox authentication failed: {auth_response.status_code}"
-                )
-                await websocket.close(code=1008, reason="Authentication failed")
-                return
-
-            auth_data = auth_response.json()["data"]
-            pve_auth_cookie = auth_data["ticket"]
-            logger.info("Retrieved session ticket for WebSocket authentication")
-
-        # Use API token for REST API calls (more secure for resource queries)
-        proxmox = get_proxmox_api()
+        logger.info("Retrieved session ticket for WebSocket authentication")
 
         # Find LXC container in cluster resources
-        container_info = None
-        for resource in proxmox.cluster.resources.get(type="vm"):
-            if resource["vmid"] == vmid and resource["type"] == "lxc":
-                container_info = resource
-                break
-
-        if not container_info:
+        try:
+            container_info = proxmox_service.find_lxc(vmid)
+        except NotFoundError:
             logger.error(f"LXC container {vmid} not found in cluster")
             await websocket.close(code=1008, reason="LXC container not found")
             return
@@ -75,7 +55,7 @@ async def terminal_proxy(websocket: WebSocket, vmid: int, token: str):
         )
 
         # Get terminal proxy ticket
-        console_data = proxmox.nodes(node).lxc(vmid).termproxy.post()
+        console_data = proxmox_service.get_terminal_ticket(node, vmid)
         terminal_port = console_data["port"]
         terminal_ticket = console_data["ticket"]
 

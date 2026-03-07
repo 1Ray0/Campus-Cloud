@@ -3,21 +3,16 @@ import uuid
 
 from sqlmodel import Session
 
-from app.core.proxmox import basic_blocking_task_status, get_proxmox_api
-from app.services import audit_service
+from app.services import audit_service, proxmox_service
 
 logger = logging.getLogger(__name__)
 
 
 def list_snapshots(*, vmid: int, resource_info: dict) -> list[dict]:
-    proxmox = get_proxmox_api()
     node = resource_info["node"]
     resource_type = resource_info["type"]
 
-    if resource_type == "qemu":
-        snapshots = proxmox.nodes(node).qemu(vmid).snapshot.get()
-    else:
-        snapshots = proxmox.nodes(node).lxc(vmid).snapshot.get()
+    snapshots = proxmox_service.list_snapshots(node, vmid, resource_type)
 
     return [
         {
@@ -41,7 +36,6 @@ def create_snapshot(
     resource_info: dict,
     user_id: uuid.UUID,
 ) -> dict:
-    proxmox = get_proxmox_api()
     node = resource_info["node"]
     resource_type = resource_info["type"]
 
@@ -51,12 +45,7 @@ def create_snapshot(
     if resource_type == "qemu" and vmstate:
         params["vmstate"] = 1
 
-    if resource_type == "qemu":
-        task = proxmox.nodes(node).qemu(vmid).snapshot.post(**params)
-    else:
-        task = proxmox.nodes(node).lxc(vmid).snapshot.post(**params)
-
-    basic_blocking_task_status(node, task)
+    task = proxmox_service.create_snapshot(node, vmid, resource_type, **params)
 
     audit_service.log_action(
         session=session,
@@ -81,16 +70,10 @@ def delete_snapshot(
     resource_info: dict,
     user_id: uuid.UUID,
 ) -> dict:
-    proxmox = get_proxmox_api()
     node = resource_info["node"]
     resource_type = resource_info["type"]
 
-    if resource_type == "qemu":
-        task = proxmox.nodes(node).qemu(vmid).snapshot(snapname).delete()
-    else:
-        task = proxmox.nodes(node).lxc(vmid).snapshot(snapname).delete()
-
-    basic_blocking_task_status(node, task)
+    task = proxmox_service.delete_snapshot(node, vmid, resource_type, snapname)
 
     audit_service.log_action(
         session=session,
@@ -115,16 +98,10 @@ def rollback_snapshot(
     resource_info: dict,
     user_id: uuid.UUID,
 ) -> dict:
-    proxmox = get_proxmox_api()
     node = resource_info["node"]
     resource_type = resource_info["type"]
 
-    if resource_type == "qemu":
-        task = proxmox.nodes(node).qemu(vmid).snapshot(snapname).rollback.post()
-    else:
-        task = proxmox.nodes(node).lxc(vmid).snapshot(snapname).rollback.post()
-
-    basic_blocking_task_status(node, task)
+    task = proxmox_service.rollback_snapshot(node, vmid, resource_type, snapname)
 
     audit_service.log_action(
         session=session,

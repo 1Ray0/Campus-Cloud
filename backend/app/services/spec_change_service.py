@@ -3,7 +3,6 @@ import uuid
 
 from sqlmodel import Session
 
-from app.core.proxmox import get_proxmox_api
 from app.exceptions import (
     BadRequestError,
     NotFoundError,
@@ -19,7 +18,7 @@ from app.schemas import (
 )
 from app.repositories import resource as resource_repo
 from app.repositories import spec_change_request as spec_request_repo
-from app.services import audit_service
+from app.services import audit_service, proxmox_service
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +50,7 @@ def _to_public(request) -> SpecChangeRequestPublic:
 def _check_ownership_and_get_info(
     *, session: Session, user, vmid: int
 ) -> dict:
-    """Check resource ownership and return Proxmox resource info.
-
-    Fixes the bug where check_resource_ownership returned None
-    but callers expected a dict.
-    """
+    """Check resource ownership and return Proxmox resource info."""
     if not user.is_superuser:
         db_resource = resource_repo.get_resource_by_vmid(
             session=session, vmid=vmid
@@ -65,40 +60,13 @@ def _check_ownership_and_get_info(
                 "You don't have permission to access this resource"
             )
 
-    proxmox = get_proxmox_api()
-    resources = proxmox.cluster.resources.get(type="vm")
-    for r in resources:
-        if r["vmid"] == vmid:
-            return r
-    raise NotFoundError(f"Resource {vmid} not found")
+    return proxmox_service.find_resource(vmid)
 
 
 def _get_current_specs(
-    proxmox, node: str, vmid: int, resource_type: str
+    node: str, vmid: int, resource_type: str
 ) -> dict:
-    if resource_type == "qemu":
-        config = proxmox.nodes(node).qemu(vmid).config.get()
-    else:
-        config = proxmox.nodes(node).lxc(vmid).config.get()
-
-    current_cpu = config.get("cores") or config.get("cpus")
-    current_memory = config.get("memory")
-    current_disk = None
-
-    if resource_type == "qemu":
-        scsi0 = config.get("scsi0", "")
-        if "size=" in scsi0:
-            size_str = scsi0.split("size=")[1].split(",")[0].split(")")[0]
-            if size_str.endswith("G"):
-                current_disk = int(size_str[:-1])
-    else:
-        rootfs = config.get("rootfs", "")
-        if "size=" in rootfs:
-            size_str = rootfs.split("size=")[1].split(",")[0]
-            if size_str.endswith("G"):
-                current_disk = int(size_str[:-1])
-
-    return {"cpu": current_cpu, "memory": current_memory, "disk": current_disk}
+    return proxmox_service.get_current_specs(node, vmid, resource_type)
 
 
 def create(
@@ -109,10 +77,9 @@ def create(
         session=session, user=user, vmid=vmid
     )
 
-    proxmox = get_proxmox_api()
     node = resource_info["node"]
     resource_type = resource_info["type"]
-    specs = _get_current_specs(proxmox, node, vmid, resource_type)
+    specs = _get_current_specs(node, vmid, resource_type)
 
     # Validate requested changes
     if (
@@ -257,18 +224,7 @@ def review(
 def _apply_spec_changes(*, session: Session, db_request, reviewer) -> None:
     """Apply approved spec changes to the Proxmox resource."""
     try:
-        proxmox = get_proxmox_api()
-        resources = proxmox.cluster.resources.get(type="vm")
-        resource_info = None
-        for r in resources:
-            if r["vmid"] == db_request.vmid:
-                resource_info = r
-                break
-
-        if not resource_info:
-            raise ProxmoxError(
-                f"Resource {db_request.vmid} not found in Proxmox"
-            )
+        resource_info = proxmox_service.find_resource(db_request.vmid)
 
         node = resource_info["node"]
         resource_type = resource_info["type"]
@@ -288,14 +244,9 @@ def _apply_spec_changes(*, session: Session, db_request, reviewer) -> None:
             )
 
         if config_params:
-            if resource_type == "qemu":
-                proxmox.nodes(node).qemu(db_request.vmid).config.put(
-                    **config_params
-                )
-            else:
-                proxmox.nodes(node).lxc(db_request.vmid).config.put(
-                    **config_params
-                )
+            proxmox_service.update_config(
+                node, db_request.vmid, resource_type, **config_params
+            )
 
         if db_request.requested_disk is not None:
             disk_increase = db_request.requested_disk - (
@@ -303,14 +254,9 @@ def _apply_spec_changes(*, session: Session, db_request, reviewer) -> None:
             )
             size_param = f"+{disk_increase}G"
             disk_name = "scsi0" if resource_type == "qemu" else "rootfs"
-            if resource_type == "qemu":
-                proxmox.nodes(node).qemu(db_request.vmid).resize.put(
-                    disk=disk_name, size=size_param
-                )
-            else:
-                proxmox.nodes(node).lxc(db_request.vmid).resize.put(
-                    disk=disk_name, size=size_param
-                )
+            proxmox_service.resize_disk(
+                node, db_request.vmid, resource_type, disk_name, size_param
+            )
             changes.append(
                 f"Disk: {db_request.current_disk} -> {db_request.requested_disk}GB"
             )
