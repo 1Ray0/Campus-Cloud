@@ -250,15 +250,30 @@ def normalize_ai_result(
 
 
 def _normalize_machine(machine: dict[str, Any], template: TemplateItem) -> dict[str, Any]:
+    def _safe_int(value: Any, default: int) -> int:
+        """
+        Safely convert a value to int, falling back to the provided default on
+        TypeError or ValueError. This defends against AI-provided strings like
+        "2 vCPU" or "4GB" that cannot be parsed directly by int().
+        """
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
     install_methods = template.raw.get("install_methods") or []
     default_resources = dict((install_methods[0].get("resources") or {})) if install_methods else {}
-    default_cpu = int(default_resources.get("cpu") or 1)
-    default_ram_mb = int(default_resources.get("ram") or 1024)
-    default_disk_gb = int(default_resources.get("hdd") or 10)
+    default_cpu = _safe_int(default_resources.get("cpu"), 1)
+    default_ram_mb = _safe_int(default_resources.get("ram"), 1024)
+    default_disk_gb = _safe_int(default_resources.get("hdd"), 10)
 
-    cpu = max(int(machine.get("cpu") or default_cpu), default_cpu)
-    memory_mb = max(int(machine.get("memory_mb") or default_ram_mb), default_ram_mb)
-    disk_gb = max(int(machine.get("disk_gb") or default_disk_gb), default_disk_gb)
+    cpu_value = machine.get("cpu")
+    memory_value = machine.get("memory_mb")
+    disk_value = machine.get("disk_gb")
+
+    cpu = max(_safe_int(cpu_value, default_cpu), default_cpu)
+    memory_mb = max(_safe_int(memory_value, default_ram_mb), default_ram_mb)
+    disk_gb = max(_safe_int(disk_value, default_disk_gb), default_disk_gb)
 
     return {
         "name": machine.get("name") or f"{template.slug}-node",
