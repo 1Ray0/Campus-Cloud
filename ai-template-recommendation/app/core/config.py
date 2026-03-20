@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     vllm_top_p: float = Field(default=0.95, ge=0.0, le=1.0)
     vllm_top_k: int = Field(default=20, ge=0, le=200)
     vllm_min_p: float = Field(default=0.0, ge=0.0, le=1.0)
+    vllm_max_tokens: int = Field(default=1600, ge=256, le=300000)
+    vllm_chat_max_tokens: int = Field(default=2048, ge=256, le=300000)
     vllm_presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     vllm_repetition_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
 
