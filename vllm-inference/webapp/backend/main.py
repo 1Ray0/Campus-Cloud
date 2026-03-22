@@ -379,7 +379,8 @@ async def chat_document_stream(
             result = extract_document(document_bytes, filename=document.filename)
             
             if not result['success']:
-                yield f"data: [ERROR] {result['error']}\n\n"
+                logger.error("文件提取失敗: %s", result['error'])
+                yield 'data: [ERROR] 文件解析失敗，請確認文件格式正確\n\n'
                 return
             
             # 構建 System Prompt（策略 C：System + User 角色分離）

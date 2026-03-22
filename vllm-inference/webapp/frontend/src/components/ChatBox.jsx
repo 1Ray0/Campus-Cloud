@@ -2,9 +2,10 @@ import { useState, useRef, useEffect } from 'react'
 import { Send, ImageIcon, X, Loader2, Upload, Paperclip, FileText, Video } from 'lucide-react'
 import MessageBubble from './MessageBubble'
 
-const isSafeMediaUrl = (url) => {
-  if (typeof url !== 'string') return false
-  return url.startsWith('blob:') || url.startsWith('data:')
+const sanitizeMediaUrl = (url) => {
+  if (typeof url !== 'string') return null
+  if (url.startsWith('blob:') || url.startsWith('data:')) return url
+  return null
 }
 
 const ChatBox = ({ modelInfo }) => {
@@ -55,7 +56,7 @@ const ChatBox = ({ modelInfo }) => {
     if (file && file.type.startsWith('image/')) {
       setImage(file)
       const reader = new FileReader()
-      reader.onload = (e) => setImagePreview(e.target.result)
+      reader.onload = (e) => setImagePreview(sanitizeMediaUrl(e.target.result))
       reader.readAsDataURL(file)
     }
   }
@@ -69,7 +70,7 @@ const ChatBox = ({ modelInfo }) => {
     setDocument(null)
     setDocumentName(null)
     setVideo(file)
-    setVideoPreview(URL.createObjectURL(file))
+    setVideoPreview(sanitizeMediaUrl(URL.createObjectURL(file)))
   }
 
   // 處理文件選擇
@@ -134,7 +135,7 @@ const ChatBox = ({ modelInfo }) => {
       else if (file.type.startsWith('image/') && modelInfo.is_image_capable) {
         setImage(file)
         const reader = new FileReader()
-        reader.onload = (e) => setImagePreview(e.target.result)
+        reader.onload = (e) => setImagePreview(sanitizeMediaUrl(e.target.result))
         reader.readAsDataURL(file)
         // 清除文件與影片
         setDocument(null)
@@ -453,7 +454,7 @@ const ChatBox = ({ modelInfo }) => {
                 <div className="relative inline-block group shrink-0">
                   <div className="relative rounded-xl overflow-hidden border border-gray-200 w-24 h-24 bg-black">
                     <video
-                      src={isSafeMediaUrl(videoPreview) ? videoPreview : undefined}
+                      src={videoPreview}
                       className="w-full h-full object-cover opacity-80"
                       muted
                       playsInline
@@ -476,7 +477,7 @@ const ChatBox = ({ modelInfo }) => {
                 <div className="relative inline-block group shrink-0">
                   <div className="relative rounded-xl overflow-hidden border border-gray-200 w-24 h-24 bg-gray-100">
                     <img
-                      src={isSafeMediaUrl(imagePreview) ? imagePreview : undefined}
+                      src={imagePreview}
                       alt="Preview"
                       className="w-full h-full object-cover"
                     />
