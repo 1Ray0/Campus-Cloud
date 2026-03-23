@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     vllm_model_name: str = Field(default="")
     vllm_timeout: int = Field(default=30, ge=3, le=300)
     vllm_temperature: float = Field(default=0.6, ge=0.0, le=2.0)
+    vllm_chat_temperature: float = Field(default=0.9, ge=0.0, le=2.0)
     vllm_top_p: float = Field(default=0.95, ge=0.0, le=1.0)
     vllm_top_k: int = Field(default=20, ge=0, le=200)
     vllm_min_p: float = Field(default=0.0, ge=0.0, le=1.0)

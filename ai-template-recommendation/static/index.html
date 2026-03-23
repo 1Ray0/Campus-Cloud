@@ -309,6 +309,7 @@
 
       let apiBaseUrl = "";
       let conversationHistory = [];
+      let isPlanGenerated = false; // 追蹤是否已經產出過架構
 
       async function loadUiConfig() {
         try {
@@ -386,7 +387,11 @@
         renderMessage("user", escapeHtml(text));
         pushToHistory("user", text);
 
-        await callChatApi();
+        if (isPlanGenerated) {
+          await generateArch();
+        } else {
+          await callChatApi();
+        }
       }
 
       async function callChatApi() {
@@ -526,6 +531,7 @@
 
           // Keep architecture card visible in UI, but do not feed this system summary back
           // into assistant chat history to avoid contaminating later intent extraction.
+          isPlanGenerated = true; // 狀態標記為已產生架構，後續對話將直接觸發微調
 
         } catch (err) {
           renderMessage("assistant", `[產出失敗] ${escapeHtml(err.message)}`);

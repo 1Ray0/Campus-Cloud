@@ -107,17 +107,25 @@ async def generate_chat_reply(request: ChatRequest) -> ChatResponse:
     if not settings.vllm_model_name:
         raise HTTPException(status_code=503, detail="VLLM_MODEL_NAME is required for AI planning.")
 
-    system_prompt = """# Role
-You are a friendly, helpful infrastructure architect and consultant for a campus cloud platform.
-Your task is to clarify the user's infrastructure deployment needs through a natural, conversational chat.
+    is_first_turn = len(request.messages) <= 1
+    greeting_instruction = (
+        "- **Greeting (First Turn)**: Since this is the start of the conversation, act as a professional AI assistant (e.g., Gemini) and start with a warm, enthusiastic greeting (e.g.,「你好！很高興能為您服務」)."
+        if is_first_turn else
+        "- **Greeting (Subsequent Turns)**: You are already in the middle of a conversation. DO NOT repeat greetings or pleasantries (e.g., do not say \"你好\" again). Transition immediately into the topic and respond directly."
+    )
+
+    system_prompt = f"""# Role
+You are a friendly, expert AI infrastructure consultant for a campus cloud platform, acting similarly to an advanced AI assistant like Gemini.
+Your primary objective is to clarify the user's infrastructure deployment needs through a natural, conversational chat.
 
 # Context & Constraints
-- The user is usually a student or a teacher (sometimes a beginner programming student).
-- This platform provisions local on-premise Virtual Machines (VMs) and LXC containers for educational and research workloads.
-- We DO NOT offer public clouds like AWS/GCP/Azure.
-- If the user's request is vague or incomplete, you must ask 1 to 4 clarifying questions to guide them (e.g., asking about expected traffic, memory needs, or if they need a database/GPU/public IP).
-- Explain technical concepts simply if they seem like a beginner.
-- **Language**: You MUST reply entirely in Traditional Chinese (zh-TW). Tone should be encouraging and professional.
+- **Target Audience**: Users range from complete beginners to experienced computing veterans. Assume they might not know what Virtual Machines (VMs), Docker/LXC Containers, or Linux OS are.
+- **Explanation Style**: When introducing a technical concept (e.g., VM vs. LXC) FOR THE FIRST TIME, use a simple, concrete, and DIVERSE analogy from everyday life (dining, transportation, renting, etc.). Ensure technical terms remain accurate. IMPORTANT: DO NOT re-explain or repeatedly compare VMs and LXC in every single turn if you have already covered it earlier in the chat history. Once a concept is explained, treat it as understood unless the user is confused.
+- **Consulting Flow**: When a user asks for a specific tool or service, first briefly acknowledge it and mention its mainstream usage or common deployment practices. Then, transition seamlessly into helping them plan by asking your targeted clarifying questions.
+- **Platform Scope**: We only provision local on-premise Virtual Machines (VMs) and LXC containers for educational and research workloads. We DO NOT offer or recommend public clouds like AWS/GCP/Azure.
+- **Interaction Rules**: If the user's request is vague, ask 1 to 3 targeted clarifying questions to guide them smoothly. Do not overwhelm them with a massive wall of questions.
+- **Language Requirement**: Regardless of this prompt being in English, you MUST reply entirely in Traditional Chinese (zh-TW). Your tone should be encouraging, patient, and highly professional.
+{greeting_instruction}
 - DO NOT generate JSON. Just chat normally.
 """
 
@@ -129,7 +137,7 @@ Your task is to clarify the user's infrastructure deployment needs through a nat
         "model": settings.vllm_model_name,
         "messages": messages,
         "max_tokens": settings.vllm_chat_max_tokens,
-        "temperature": settings.vllm_temperature,
+        "temperature": settings.vllm_chat_temperature,
         "top_p": settings.vllm_top_p,
         "top_k": settings.vllm_top_k,
         "min_p": settings.vllm_min_p,
@@ -192,7 +200,7 @@ async def extract_intent_from_chat(request: ChatRequest) -> ExtractedIntent:
 
     formatted_user_history = "\n\n".join(user_messages) if user_messages else "(No user messages)"
     formatted_history = "\n\n".join(full_chat_history) if full_chat_history else "(No conversation history)"
-    user_signal_flags = _extract_user_signal_flags(request.messages)
+    user_signal_flags = _extract_user_signal_flags(recent_messages)
 
     prompt = f"""# Role
 You are an expert "Intent Extractor". Your task is to accurately extract the user's final architectural requirements from a conversation history.
@@ -203,9 +211,17 @@ You are an expert "Intent Extractor". Your task is to accurately extract the use
 # Full Conversation History (Reference)
 {formatted_history}
 
+# Keyword Detection Hints
+System detected the following potential keywords in the user's recent messages:
+- Needs Windows/GUI: {user_signal_flags["needs_windows"]}
+- Requires GPU: {user_signal_flags["requires_gpu"]}
+- Needs Database: {user_signal_flags["needs_database"]}
+- Needs Public Web: {user_signal_flags["needs_public_web"]}
+
 # Task
 Analyze the conversation above. If there are conflicting statements, trust the LATEST user decision.
 Prioritize "Primary User Signals" over assistant suggestions/questions.
+Consider the "Keyword Detection Hints" as potential needs, but you MUST evaluate the conversation context to determine if the user ACTUALLY still wants them. If the user used a negation or changed their mind (e.g., "I don't need X anymore"), you MUST output false for that requirement.
 Extract their requirements into a strict JSON object that matches the Output Schema.
 
 # Output Schema constraints
@@ -245,13 +261,6 @@ Output ONLY valid JSON matching the exact keys and types specified.
             data = response.json()
             content = data["choices"][0]["message"]["content"]
             parsed = json.loads(content)
-            merged_flags = {
-                "needs_public_web": bool(parsed.get("needs_public_web", False)) or user_signal_flags["needs_public_web"],
-                "needs_database": bool(parsed.get("needs_database", False)) or user_signal_flags["needs_database"],
-                "requires_gpu": bool(parsed.get("requires_gpu", False)) or user_signal_flags["requires_gpu"],
-                "needs_windows": bool(parsed.get("needs_windows", False)) or user_signal_flags["needs_windows"],
-            }
-            parsed.update(merged_flags)
             return ExtractedIntent(**parsed)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"AI extraction failed: {exc}") from exc
@@ -288,13 +297,11 @@ async def generate_ai_plan(
         "inferred_needs_database": inferred_needs_database,
     }
 
-    formatted_chat = "\\n\\n".join([f"{'User' if m.role == 'user' else 'Assistant'}: {m.content}" for m in chat_history])
-
     plan_schema = {
         "summary": "Traditional Chinese summary",
         "workload_profile": "one of: lightweight | moderate | compute-intensive | gpu-required | storage-heavy",
         "recommended_templates": [
-            {"slug": "template-slug", "name": "template-name", "why": "Traditional Chinese reason (referencing specific context from the chat history)"}
+            {"slug": "template-slug", "name": "template-name", "why": "Traditional Chinese reason (referencing specific context from the user intent)"}
         ],
         "possible_needed_templates": [
             {"slug": "template-slug", "name": "template-name", "why": "Traditional Chinese reason"}
@@ -310,7 +317,7 @@ async def generate_ai_plan(
                 "disk_gb": "integer",
                 "gpu": "integer (0 or more)",
                 "assigned_node": "node-name-or-null",
-                "why": "Traditional Chinese reason (referencing specific context from the chat history)",
+                "why": "Traditional Chinese reason (referencing specific context from the user intent)",
             }
 
         ],
@@ -341,7 +348,7 @@ Generate a complete deployment recommendation based on the user's intent, availa
 - **Explanation Depth (`why` fields)**: For each `why` field (in recommended_templates, possible_needed_templates, and machines), keep it concise but precise, roughly 1 to 2 sentences (approx. 40-60 chars). Directly explain why this specific template/resource is needed and how its configured CPU/RAM/Disk supports the workload. Do not repeat the general summary here.
 - **Valid Templates**: Use ONLY template slugs from the provided `Template Catalog Bundle`. DO NOT invent templates.
 - **Template Separation**: `recommended_templates` MUST be highly precise and contain ONLY the strictly necessary core templates directly required to fulfill the user's explicit request. Do not over-recommend here. `possible_needed_templates` MUST proactively anticipate future needs, scaling, and operational maturity. Think expansively and TRY YOUR BEST to recommend up to 3 extensible/support templates (e.g., databases, reverse proxy/NPM, monitoring, secret managers, caching, or backup solutions) that would greatly benefit their architecture. State why they are highly recommended in the `why` field.
-- **Requirement Flags & Context**: You MUST STRICTLY honor request flags and user's specific context derived from the `Chat History`.
+- **Requirement Flags & Context**: You MUST STRICTLY honor request flags and user's specific context derived from the `User Context`.
   * `needs_public_web=true`: include public-entry components (e.g., reverse proxy or web gateway).
   * `needs_database=true` or `inferred_needs_database=true`: include suitable database support.
   * `requires_gpu=true`: fulfill GPU requirements in the plan.
@@ -359,9 +366,6 @@ Generate a complete deployment recommendation based on the user's intent, availa
 - **Output Format**: Output exactly the JSON structure defined in `Output Schema`. Do not wrap with natural language conversational responses.
 
 # Input Data
-## Chat History (Recent Context)
-{formatted_chat}
-
 ## User Context (Extracted summary)
 {json.dumps(user_context, ensure_ascii=False)}
 
