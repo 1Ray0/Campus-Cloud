@@ -173,7 +173,7 @@ async def generate_chat_reply(request: ChatRequest) -> ChatResponse:
     is_first_turn = len(request.messages) <= 1
     catalog_context = _build_chat_catalog_context(catalog, request.messages, top_k=request.top_k)
     greeting_instruction = (
-        "- **Greeting (First Turn)**: Since this is the start of the conversation, start with one short and warm greeting in Traditional Chinese (for example:????????????????)."
+        "- **Greeting (First Turn)**: Since this is the start of the conversation, start with one short and warm greeting in Traditional Chinese (for example:「嗨，你好！歡迎來到校園雲端平台～」)."
         if is_first_turn else
         "- **Greeting (Subsequent Turns)**: You are already in the middle of a conversation. Do not repeat greetings. Respond directly."
     )
