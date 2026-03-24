@@ -98,12 +98,13 @@ def create_connection(
     - 目標 VM（如果有）也必須在當前使用者的可見範圍內
     """
     try:
-        # 權限檢查：來源 VM
-        check_firewall_access(
-            vmid=conn.source_vmid,
-            current_user=current_user,
-            session=session,
-        )
+        # 權限檢查：來源 VM（若有）
+        if conn.source_vmid is not None:
+            check_firewall_access(
+                vmid=conn.source_vmid,
+                current_user=current_user,
+                session=session,
+            )
         # 權限檢查：目標 VM（若有）
         if conn.target_vmid is not None:
             check_firewall_access(
