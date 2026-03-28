@@ -1,11 +1,12 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
 
 import { createFileRoute, Link, redirect } from "@tanstack/react-router"
-import { ArrowLeft, Plus, UserMinus } from "lucide-react"
-import { Suspense, useState } from "react"
+import { ArrowLeft, Plus, Upload, UserMinus } from "lucide-react"
+import { Suspense, useRef, useState } from "react"
 import { useForm } from "react-hook-form"
 
-import { GroupsService, UsersService } from "@/client"
+import { GroupsService, OpenAPI, UsersService } from "@/client"
+import { request as __request } from "@/client/core/request"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -29,6 +30,13 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import useCustomToast from "@/hooks/useCustomToast"
 
+type CsvImportResult = {
+  created: string[]
+  already_existed: string[]
+  added_to_group: number
+  errors: string[]
+}
+
 export const Route = createFileRoute("/_layout/groups_/$groupId")({
   component: GroupDetailPage,
   beforeLoad: async () => {
@@ -41,6 +49,97 @@ export const Route = createFileRoute("/_layout/groups_/$groupId")({
     meta: [{ title: "群組詳情 - Campus Cloud" }],
   }),
 })
+
+function ImportCsvDialog({ groupId }: { groupId: string }) {
+  const [open, setOpen] = useState(false)
+  const [result, setResult] = useState<CsvImportResult | null>(null)
+  const [loading, setLoading] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const queryClient = useQueryClient()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
+
+  const handleImport = async () => {
+    const file = fileRef.current?.files?.[0]
+    if (!file) return
+    setLoading(true)
+    setResult(null)
+    try {
+      const data = await __request<CsvImportResult>(OpenAPI, {
+        method: "POST",
+        url: `/api/v1/groups/${groupId}/import-csv`,
+        formData: { file },
+      })
+      setResult(data)
+      queryClient.invalidateQueries({ queryKey: ["group", groupId] })
+      showSuccessToast(`匯入完成：新建 ${data.created.length} 人，加入群組 ${data.added_to_group} 人`)
+    } catch (err: any) {
+      showErrorToast(err?.body?.detail ?? "匯入失敗")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleOpenChange = (v: boolean) => {
+    setOpen(v)
+    if (!v) {
+      setResult(null)
+      if (fileRef.current) fileRef.current.value = ""
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm">
+          <Upload className="mr-1 h-4 w-4" />
+          匯入 CSV
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>從 CSV 大量匯入學生</DialogTitle>
+        </DialogHeader>
+        <div className="grid gap-4 py-4">
+          <p className="text-sm text-muted-foreground">
+            CSV 格式：學號, 姓名, 班級（支援 Big5 / UTF-8）。
+            帳號不存在時自動建立，email 為 <code>學號@ntub.edu.tw</code>，系統將寄送通知信。
+          </p>
+          <div className="grid gap-2">
+            <Label htmlFor="csv-file">選擇 CSV 檔案</Label>
+            <input
+              id="csv-file"
+              type="file"
+              accept=".csv"
+              ref={fileRef}
+              className="text-sm file:mr-2 file:rounded file:border-0 file:bg-muted file:px-3 file:py-1 file:text-sm"
+            />
+          </div>
+          {result && (
+            <div className="rounded border bg-muted/40 p-3 text-sm space-y-1">
+              <p>✅ 新建帳號：<strong>{result.created.length}</strong> 人</p>
+              <p>ℹ️ 帳號已存在：<strong>{result.already_existed.length}</strong> 人</p>
+              <p>👥 加入群組：<strong>{result.added_to_group}</strong> 人</p>
+              {result.errors.length > 0 && (
+                <div className="text-destructive">
+                  <p>❌ 錯誤（{result.errors.length}）：</p>
+                  <ul className="ml-4 list-disc text-xs">
+                    {result.errors.map((e, i) => <li key={i}>{e}</li>)}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline" disabled={loading}>關閉</Button>
+          </DialogClose>
+          <LoadingButton loading={loading} onClick={handleImport}>匯入</LoadingButton>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
 
 function AddMembersDialog({ groupId }: { groupId: string }) {
   const [open, setOpen] = useState(false)
@@ -145,6 +244,7 @@ function GroupDetailContent({ groupId }: { groupId: string }) {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <ImportCsvDialog groupId={groupId} />
           <AddMembersDialog groupId={groupId} />
         </div>
       </div>

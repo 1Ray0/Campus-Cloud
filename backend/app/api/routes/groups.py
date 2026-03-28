@@ -1,14 +1,24 @@
 """群組管理 API 路由"""
 
+import csv
+import io
+import logging
+import secrets
 import uuid
 
-from fastapi import APIRouter, HTTPException
+logger = logging.getLogger(__name__)
+
+from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from app.api.deps import AdminUser, SessionDep
+from app.core.config import settings
 from app.exceptions import PermissionDeniedError
 from app.repositories import group as group_repo
+from app.repositories.user import create_user as create_user_in_db
+from app.repositories.user import get_user_by_email
 from app.schemas.common import Message
 from app.schemas.group import (
+    CsvImportResult,
     GroupCreate,
     GroupDetailPublic,
     GroupMemberAdd,
@@ -16,7 +26,9 @@ from app.schemas.group import (
     GroupPublic,
     GroupsPublic,
 )
+from app.schemas.user import UserCreate
 from app.services import audit_service
+from app.utils import generate_new_account_email, send_email
 
 router = APIRouter(prefix="/groups", tags=["groups"])
 
@@ -191,4 +203,99 @@ def remove_member(
     )
     return Message(message="Member removed")
 
+
+@router.post("/{group_id}/import-csv", response_model=CsvImportResult)
+async def import_members_from_csv(
+    group_id: uuid.UUID,
+    session: SessionDep,
+    current_user: AdminUser,
+    file: UploadFile = File(...),
+):
+    """從 CSV 大量匯入學生帳號並加入群組。
+
+    CSV 格式（支援 Big5/UTF-8）：學號, 姓名, 班級
+    帳號不存在時自動建立，email 為 {學號}@ntub.edu.tw，並發送通知信。
+    """
+    db_group = group_repo.get_group_by_id(session=session, group_id=group_id)
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    _check_group_access(current_user, db_group)
+
+    raw = await file.read()
+    content: str | None = None
+    for encoding in ("cp950", "utf-8-sig", "utf-8"):
+        try:
+            content = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    if content is None:
+        raise HTTPException(status_code=400, detail="無法解析 CSV 檔案編碼")
+
+    reader = csv.reader(io.StringIO(content))
+    next(reader, None)  # 略過標題列
+
+    result = CsvImportResult()
+    emails_to_add: list[str] = []
+
+    for row in reader:
+        if len(row) < 2:
+            continue
+        student_id = row[0].strip()
+        full_name = row[1].strip()
+        if not student_id:
+            continue
+        email = f"{student_id}@ntub.edu.tw"
+
+        existing = get_user_by_email(session=session, email=email)
+        if existing:
+            result.already_existed.append(email)
+        else:
+            password = secrets.token_urlsafe(12)
+            user_in = UserCreate(
+                email=email,
+                password=password,
+                full_name=full_name,
+                is_active=True,
+            )
+            try:
+                create_user_in_db(session=session, user_create=user_in)
+            except Exception as exc:
+                result.errors.append(f"{email}: 建立帳號失敗 {exc}")
+                continue
+            result.created.append(email)
+            if settings.emails_enabled:
+                try:
+                    email_data = generate_new_account_email(
+                        email_to=email, username=email, password=password
+                    )
+                    send_email(
+                        email_to=email,
+                        subject=email_data.subject,
+                        html_content=email_data.html_content,
+                    )
+                except Exception as exc:
+                    logger.warning("寄信失敗 %s: %s", email, exc)
+
+        emails_to_add.append(email)
+
+    # Commit user creations now so accounts exist in DB even if group-add fails.
+    session.commit()
+
+    added, _ = group_repo.add_members_by_emails(
+        session=session, group_id=group_id, emails=emails_to_add
+    )
+    result.added_to_group = len(added)
+
+    audit_service.log_action(
+        session=session,
+        user_id=current_user.id,
+        action="group_member_add",
+        details=(
+            f"CSV import to group '{db_group.name}': "
+            f"created={len(result.created)}, existed={len(result.already_existed)}, "
+            f"added={result.added_to_group}, errors={len(result.errors)}"
+        ),
+    )
+    return result
 

@@ -69,3 +69,12 @@ class GroupDetailPublic(BaseModel):
     members: list[GroupMemberPublic] = []
 
 
+class CsvImportResult(BaseModel):
+    """CSV 大量匯入結果"""
+
+    created: list[str] = []         # 新建立帳號的 email 列表
+    already_existed: list[str] = [] # 已存在帳號的 email 列表
+    added_to_group: int = 0         # 成功加入群組的人數
+    errors: list[str] = []          # 錯誤訊息列表
+
+
