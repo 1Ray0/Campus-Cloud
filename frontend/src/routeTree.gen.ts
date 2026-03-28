@@ -16,6 +16,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as LayoutRouteImport } from './routes/_layout'
 import { Route as LayoutIndexRouteImport } from './routes/_layout/index'
 import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
+import { Route as LayoutResourcesCreateRouteImport } from './routes/_layout/resources-create'
 import { Route as LayoutResourcesRouteImport } from './routes/_layout/resources'
 import { Route as LayoutMyResourcesRouteImport } from './routes/_layout/my-resources'
 import { Route as LayoutGroupsRouteImport } from './routes/_layout/groups'
@@ -63,6 +64,11 @@ const LayoutIndexRoute = LayoutIndexRouteImport.update({
 const LayoutSettingsRoute = LayoutSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => LayoutRoute,
+} as any)
+const LayoutResourcesCreateRoute = LayoutResourcesCreateRouteImport.update({
+  id: '/resources-create',
+  path: '/resources-create',
   getParentRoute: () => LayoutRoute,
 } as any)
 const LayoutResourcesRoute = LayoutResourcesRouteImport.update({
@@ -151,6 +157,7 @@ export interface FileRoutesByFullPath {
   '/groups': typeof LayoutGroupsRoute
   '/my-resources': typeof LayoutMyResourcesRoute
   '/resources': typeof LayoutResourcesRoute
+  '/resources-create': typeof LayoutResourcesCreateRoute
   '/settings': typeof LayoutSettingsRoute
   '/admin/audit-logs': typeof LayoutAdminAuditLogsRoute
   '/admin/proxmox': typeof LayoutAdminProxmoxRoute
@@ -171,6 +178,7 @@ export interface FileRoutesByTo {
   '/groups': typeof LayoutGroupsRoute
   '/my-resources': typeof LayoutMyResourcesRoute
   '/resources': typeof LayoutResourcesRoute
+  '/resources-create': typeof LayoutResourcesCreateRoute
   '/settings': typeof LayoutSettingsRoute
   '/': typeof LayoutIndexRoute
   '/admin/audit-logs': typeof LayoutAdminAuditLogsRoute
@@ -195,6 +203,7 @@ export interface FileRoutesById {
   '/_layout/groups': typeof LayoutGroupsRoute
   '/_layout/my-resources': typeof LayoutMyResourcesRoute
   '/_layout/resources': typeof LayoutResourcesRoute
+  '/_layout/resources-create': typeof LayoutResourcesCreateRoute
   '/_layout/settings': typeof LayoutSettingsRoute
   '/_layout/': typeof LayoutIndexRoute
   '/_layout/admin/audit-logs': typeof LayoutAdminAuditLogsRoute
@@ -220,6 +229,7 @@ export interface FileRouteTypes {
     | '/groups'
     | '/my-resources'
     | '/resources'
+    | '/resources-create'
     | '/settings'
     | '/admin/audit-logs'
     | '/admin/proxmox'
@@ -240,6 +250,7 @@ export interface FileRouteTypes {
     | '/groups'
     | '/my-resources'
     | '/resources'
+    | '/resources-create'
     | '/settings'
     | '/'
     | '/admin/audit-logs'
@@ -263,6 +274,7 @@ export interface FileRouteTypes {
     | '/_layout/groups'
     | '/_layout/my-resources'
     | '/_layout/resources'
+    | '/_layout/resources-create'
     | '/_layout/settings'
     | '/_layout/'
     | '/_layout/admin/audit-logs'
@@ -330,6 +342,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof LayoutSettingsRouteImport
+      parentRoute: typeof LayoutRoute
+    }
+    '/_layout/resources-create': {
+      id: '/_layout/resources-create'
+      path: '/resources-create'
+      fullPath: '/resources-create'
+      preLoaderRoute: typeof LayoutResourcesCreateRouteImport
       parentRoute: typeof LayoutRoute
     }
     '/_layout/resources': {
@@ -458,6 +477,7 @@ interface LayoutRouteChildren {
   LayoutGroupsRoute: typeof LayoutGroupsRoute
   LayoutMyResourcesRoute: typeof LayoutMyResourcesRoute
   LayoutResourcesRoute: typeof LayoutResourcesRoute
+  LayoutResourcesCreateRoute: typeof LayoutResourcesCreateRoute
   LayoutSettingsRoute: typeof LayoutSettingsRoute
   LayoutIndexRoute: typeof LayoutIndexRoute
   LayoutGroupsGroupIdRoute: typeof LayoutGroupsGroupIdRoute
@@ -474,6 +494,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutGroupsRoute: LayoutGroupsRoute,
   LayoutMyResourcesRoute: LayoutMyResourcesRoute,
   LayoutResourcesRoute: LayoutResourcesRoute,
+  LayoutResourcesCreateRoute: LayoutResourcesCreateRoute,
   LayoutSettingsRoute: LayoutSettingsRoute,
   LayoutIndexRoute: LayoutIndexRoute,
   LayoutGroupsGroupIdRoute: LayoutGroupsGroupIdRoute,

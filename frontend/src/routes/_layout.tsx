@@ -27,7 +27,7 @@ export const Route = createFileRoute("/_layout")({
 function Layout() {
   const { location } = useRouterState()
   const isFullscreen = FULLSCREEN_ROUTES.includes(location.pathname)
-  const hasFixedFooter = location.pathname === "/applications-create"
+  const hasFixedFooter = location.pathname === "/applications-create" || location.pathname === "/resources-create"
 
   return (
     <SidebarProvider>

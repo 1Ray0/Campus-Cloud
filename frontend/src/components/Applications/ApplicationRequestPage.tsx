@@ -1,13 +1,14 @@
 import { standardSchemaResolver } from "@hookform/resolvers/standard-schema"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
-import { ArrowLeft } from "lucide-react"
+import { ArrowLeft, LayoutTemplate, X } from "lucide-react"
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useForm, useWatch } from "react-hook-form"
 import { useTranslation } from "react-i18next"
 import { z } from "zod"
 
-import { LxcService, VmRequestsService, VmService } from "@/client"
+import { type ApiError, LxcService, VmRequestsService, VmService } from "@/client"
+import useAuth from "@/hooks/useAuth"
 import { Button } from "@/components/ui/button"
 import {
   Form,
@@ -32,6 +33,7 @@ import { Textarea } from "@/components/ui/textarea"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 import { AiChatPanel, type AiPlanResult } from "./AiChatPanel"
+import { FastTemplatesTab, type FastTemplate } from "./FastTemplatesTab"
 
 function normalizeHostname(value: string) {
   return String(value || "")
@@ -66,6 +68,9 @@ export function ApplicationRequestPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
+  const { user } = useAuth()
+  const needsApproval = user?.role === "student"
+  const [showTemplateSelector, setShowTemplateSelector] = useState(false)
   const [resourceType, setResourceType] = useState<"lxc" | "vm">("lxc")
   const [serviceTemplateName, setServiceTemplateName] = useState("")
   const [serviceTemplateSlug, setServiceTemplateSlug] = useState("")
@@ -77,12 +82,14 @@ export function ApplicationRequestPage() {
     () =>
       z.object({
         resource_type: z.enum(["lxc", "vm"]),
-        reason: z
-          .string()
-          .min(1, { message: t("validation:reason.required") })
-          .min(10, {
-            message: t("validation:reason.minLength", { count: 10 }),
-          }),
+        reason: needsApproval
+          ? z
+              .string()
+              .min(1, { message: t("validation:reason.required") })
+              .min(10, {
+                message: t("validation:reason.minLength", { count: 10 }),
+              })
+          : z.string().optional(),
         hostname: z
           .string()
           .min(1, { message: t("validation:name.required") })
@@ -106,7 +113,7 @@ export function ApplicationRequestPage() {
         os_info: z.string().optional(),
         expiry_date: z.string().optional(),
       }),
-    [t],
+    [t, needsApproval],
   )
 
   type FormData = z.input<typeof formSchema>
@@ -151,8 +158,9 @@ export function ApplicationRequestPage() {
   const watchedUsername = useWatch({ control: form.control, name: "username" })
 
   const isSubmitReady = useMemo(() => {
+    const reasonReady = needsApproval ? Boolean(watchedReason?.trim()) : true
     const basicReady = Boolean(
-      watchedReason?.trim() && watchedHostname?.trim() && watchedPassword,
+      reasonReady && watchedHostname?.trim() && watchedPassword,
     )
 
     if (!basicReady) return false
@@ -184,38 +192,76 @@ export function ApplicationRequestPage() {
     enabled: resourceType === "vm",
   })
 
-  const mutation = useMutation({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mutation = useMutation<any, Error, FormData>({
     mutationFn: (data: FormData) => {
-      if (data.resource_type === "lxc") {
-        if (!data.ostemplate || !data.rootfs_size) {
-          throw new Error(t("validation:requirement.lxc"))
+      if (needsApproval) {
+        if (data.resource_type === "lxc") {
+          if (!data.ostemplate || !data.rootfs_size) {
+            throw new Error(t("validation:requirement.lxc"))
+          }
+          return VmRequestsService.createVmRequest({
+            requestBody: {
+              reason: data.reason!,
+              resource_type: "lxc",
+              hostname: data.hostname,
+              ostemplate: data.ostemplate,
+              rootfs_size: data.rootfs_size,
+              cores: data.cores,
+              memory: data.memory,
+              password: data.password,
+              storage: data.storage,
+              os_info: data.os_info || null,
+              expiry_date: data.expiry_date || null,
+            },
+          })
         }
-
+        if (!data.template_id || !data.disk_size || !data.username) {
+          throw new Error(t("validation:requirement.vm"))
+        }
         return VmRequestsService.createVmRequest({
           requestBody: {
-            reason: data.reason,
-            resource_type: "lxc",
+            reason: data.reason!,
+            resource_type: "vm",
             hostname: data.hostname,
-            ostemplate: data.ostemplate,
-            rootfs_size: data.rootfs_size,
+            template_id: data.template_id,
+            username: data.username,
+            password: data.password,
             cores: data.cores,
             memory: data.memory,
-            password: data.password,
-            storage: data.storage,
+            disk_size: data.disk_size,
             os_info: data.os_info || null,
             expiry_date: data.expiry_date || null,
           },
         })
       }
 
+      if (data.resource_type === "lxc") {
+        if (!data.ostemplate || !data.rootfs_size) {
+          throw new Error(t("validation:requirement.lxc"))
+        }
+        return LxcService.createLxc({
+          requestBody: {
+            hostname: data.hostname,
+            ostemplate: data.ostemplate,
+            cores: data.cores,
+            memory: data.memory,
+            rootfs_size: data.rootfs_size,
+            password: data.password,
+            storage: data.storage,
+            environment_type: serviceTemplateName || t("resources:create.customSpec"),
+            os_info: data.os_info || null,
+            expiry_date: data.expiry_date || null,
+            start: true,
+            unprivileged: true,
+          },
+        })
+      }
       if (!data.template_id || !data.disk_size || !data.username) {
         throw new Error(t("validation:requirement.vm"))
       }
-
-      return VmRequestsService.createVmRequest({
+      return VmService.createVm({
         requestBody: {
-          reason: data.reason,
-          resource_type: "vm",
           hostname: data.hostname,
           template_id: data.template_id,
           username: data.username,
@@ -223,17 +269,27 @@ export function ApplicationRequestPage() {
           cores: data.cores,
           memory: data.memory,
           disk_size: data.disk_size,
+          environment_type: t("resources:create.customSpec"),
           os_info: data.os_info || null,
           expiry_date: data.expiry_date || null,
+          start: true,
         },
       })
     },
-    onSuccess: () => {
-      showSuccessToast(t("messages:success.applicationSubmitted"))
-      queryClient.invalidateQueries({ queryKey: ["vm-requests"] })
-      navigate({ to: "/applications" })
+    onSuccess: (data) => {
+      if (needsApproval) {
+        showSuccessToast(t("messages:success.applicationSubmitted"))
+        queryClient.invalidateQueries({ queryKey: ["vm-requests"] })
+        navigate({ to: "/applications" })
+      } else {
+        showSuccessToast(
+          `${(data as { message?: string }).message || t("messages:success.resourceCreated")}`,
+        )
+        queryClient.invalidateQueries({ queryKey: ["resources"] })
+        navigate({ to: "/resources" })
+      }
     },
-    onError: handleError.bind(showErrorToast),
+    onError: (err) => handleError.call(showErrorToast, err as ApiError),
   })
 
   const updateFormValue = useCallback(
@@ -280,9 +336,8 @@ export function ApplicationRequestPage() {
         if (prefill.username) updateFormValue("username", prefill.username)
       }
 
-      showSuccessToast(t("applications:aiChat.importSuccess"))
     },
-    [showSuccessToast, t, updateFormValue],
+    [updateFormValue],
   )
 
   const handleImportReason = useCallback(
@@ -293,6 +348,20 @@ export function ApplicationRequestPage() {
       showSuccessToast(t("applications:aiChat.reasonImportSuccess"))
     },
     [showSuccessToast, t, updateFormValue],
+  )
+
+  const handleSelectTemplate = useCallback(
+    (template: FastTemplate) => {
+      setServiceTemplateName(template.name || "")
+      setServiceTemplateSlug(template.slug || "")
+      setResourceType("lxc")
+      updateFormValue("resource_type", "lxc")
+      if (template.name) {
+        updateFormValue("hostname", normalizeHostname(template.name))
+      }
+      setShowTemplateSelector(false)
+    },
+    [updateFormValue],
   )
 
   const onSubmit = (data: FormData) => {
@@ -364,25 +433,31 @@ export function ApplicationRequestPage() {
   }, [desktopPanelFrame])
 
   return (
-    <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-6">
-      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_400px] xl:grid-cols-[minmax(0,1fr)_420px]">
+    <div className={`mx-auto flex w-full ${needsApproval ? "max-w-[1180px]" : "max-w-[760px]"} flex-col gap-6`}>
+      <div className={`grid items-start gap-6 ${needsApproval ? "lg:grid-cols-[minmax(0,1fr)_400px] xl:grid-cols-[minmax(0,1fr)_420px]" : ""}`}>
         <div className="min-w-0 max-w-[760px] space-y-6">
           <div className="flex items-start gap-3">
             <Button asChild variant="outline" size="icon" className="mt-0.5 shrink-0">
-              <Link to="/applications" aria-label={t("common:buttons.back")}>
+              <Link to={needsApproval ? "/applications" : "/resources"} aria-label={t("common:buttons.back")}>
                 <ArrowLeft className="h-4 w-4" />
               </Link>
             </Button>
             <div className="min-w-0">
               <h1 className="text-2xl font-bold tracking-tight">
-                {t("applications:create.heading")}
+                {needsApproval ? t("applications:create.heading") : t("resources:create.heading")}
               </h1>
               <p className="text-muted-foreground">
-                {t("applications:create.description")}
+                {needsApproval ? t("applications:create.description") : t("resources:create.description")}
               </p>
             </div>
           </div>
 
+          {showTemplateSelector ? (
+            <FastTemplatesTab
+              onSelectTemplate={handleSelectTemplate}
+              onBack={() => setShowTemplateSelector(false)}
+            />
+          ) : (
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
               <Tabs
@@ -483,34 +558,48 @@ export function ApplicationRequestPage() {
                               )}
                             />
 
-                            {serviceTemplateName ? (
-                              <FormItem>
-                                <FormLabel>
-                                  {t("applications:form.serviceTemplate")}
-                                </FormLabel>
-                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                                  <Input value={serviceTemplateName} readOnly />
-                                  <div className="flex gap-2 sm:shrink-0">
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="sm"
-                                      onClick={() => {
-                                        setServiceTemplateName("")
-                                        setServiceTemplateSlug("")
-                                      }}
-                                    >
-                                      {t("applications:form.clearTemplate")}
-                                    </Button>
+                            <FormItem>
+                              <FormLabel>
+                                {t("applications:form.serviceTemplate")}
+                              </FormLabel>
+                              {serviceTemplateName ? (
+                                <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
+                                  <LayoutTemplate className="h-4 w-4 shrink-0 text-primary" />
+                                  <div className="flex-1 min-w-0">
+                                    <span className="block truncate text-sm font-medium">
+                                      {serviceTemplateName}
+                                    </span>
+                                    {serviceTemplateSlug ? (
+                                      <span className="block truncate text-xs text-muted-foreground">
+                                        {serviceTemplateSlug}
+                                      </span>
+                                    ) : null}
                                   </div>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6 shrink-0"
+                                    onClick={() => {
+                                      setServiceTemplateName("")
+                                      setServiceTemplateSlug("")
+                                    }}
+                                  >
+                                    <X className="h-3.5 w-3.5" />
+                                  </Button>
                                 </div>
-                                {serviceTemplateSlug ? (
-                                  <div className="text-xs text-muted-foreground">
-                                    slug: {serviceTemplateSlug}
-                                  </div>
-                                ) : null}
-                              </FormItem>
-                            ) : null}
+                              ) : (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="w-full justify-start gap-2 text-muted-foreground"
+                                  onClick={() => setShowTemplateSelector(true)}
+                                >
+                                  <LayoutTemplate className="h-4 w-4" />
+                                  {t("applications:form.selectTemplate")}
+                                </Button>
+                              )}
+                            </FormItem>
 
                             <FormField
                               control={form.control}
@@ -976,6 +1065,7 @@ export function ApplicationRequestPage() {
                           </div>
                 </TabsContent>
 
+              {needsApproval && (
               <FormField
                 control={form.control}
                 name="reason"
@@ -1000,16 +1090,19 @@ export function ApplicationRequestPage() {
                   </FormItem>
                 )}
               />
+              )}
               </Tabs>
               <div className="flex flex-col gap-3 border-t pt-6 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm text-muted-foreground">
-                  {t("applications:aiChat.title")}
-                </p>
+                {needsApproval ? (
+                  <p className="text-sm text-muted-foreground">
+                    {t("applications:aiChat.title")}
+                  </p>
+                ) : <div />}
                 <div className="flex flex-col-reverse gap-3 sm:flex-row">
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={() => navigate({ to: "/applications" })}
+                    onClick={() => navigate({ to: needsApproval ? "/applications" : "/resources" })}
                     disabled={mutation.isPending}
                   >
                     {t("common:buttons.cancel")}
@@ -1019,14 +1112,16 @@ export function ApplicationRequestPage() {
                     loading={mutation.isPending}
                     disabled={!isSubmitReady}
                   >
-                    {t("applications:create.submitButton")}
+                    {needsApproval ? t("applications:create.submitButton") : t("resources:create.submitButton")}
                   </LoadingButton>
                 </div>
               </div>
             </form>
           </Form>
+          )}
         </div>
 
+        {needsApproval && (
         <aside ref={aiColumnRef} className="min-w-0 lg:min-h-[32rem]" style={aiColumnStyle}>
           <div
             className="h-full overflow-hidden rounded-2xl border bg-card/95 p-3"
@@ -1038,6 +1133,7 @@ export function ApplicationRequestPage() {
             />
           </div>
         </aside>
+        )}
       </div>
     </div>
   )
