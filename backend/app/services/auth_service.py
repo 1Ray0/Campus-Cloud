@@ -31,11 +31,15 @@ def login(*, session: Session, email: str, password: str) -> Token:
 
 
 def google_login(*, session: Session, id_token: str) -> Token:
-    with httpx.Client() as client:
-        r = client.get(
-            "https://oauth2.googleapis.com/tokeninfo",
-            params={"id_token": id_token},
-        )
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            r = client.get(
+                "https://oauth2.googleapis.com/tokeninfo",
+                params={"id_token": id_token},
+            )
+    except httpx.RequestError as exc:
+        # Ensure network/timeout issues become deterministic application errors
+        raise BadRequestError("Unable to verify Google token") from exc
     if r.status_code != 200:
         raise BadRequestError("Invalid Google token")
     data = r.json()
