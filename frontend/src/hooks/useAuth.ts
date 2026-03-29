@@ -73,9 +73,7 @@ const useAuth = () => {
     onSuccess: () => {
       navigate({ to: "/" })
     },
-    onError: (err: Error) => {
-      showErrorToast(err.message)
-    },
+    onError: handleError.bind(showErrorToast),
   })
 
   const logout = () => {
