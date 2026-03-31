@@ -79,9 +79,9 @@ function renderClusterMetrics() {
     metricCard("Current CPU", formatPercent(cluster.current_cpu_ratio)),
     metricCard("Current RAM", formatPercent(cluster.current_memory_ratio)),
     metricCard("Current Disk", formatPercent(cluster.current_disk_ratio)),
-    metricCard("Average CPU", formatPercent(cluster.average_cpu_ratio)),
-    metricCard("Average RAM", formatPercent(cluster.average_memory_ratio)),
-    metricCard("Average Disk", formatPercent(cluster.average_disk_ratio)),
+    metricCard("Baseline CPU", formatPercent(cluster.average_cpu_ratio)),
+    metricCard("Baseline RAM", formatPercent(cluster.average_memory_ratio)),
+    metricCard("Baseline Disk", formatPercent(cluster.average_disk_ratio)),
     metricCard("Peak CPU", formatPercent(cluster.peak_cpu_ratio)),
     metricCard("Peak RAM", formatPercent(cluster.peak_memory_ratio)),
     metricCard("Peak Disk", formatPercent(cluster.peak_disk_ratio)),
@@ -126,9 +126,9 @@ function renderNodeCards() {
             <p>Current CPU <strong>${formatPercent(node.current_cpu_ratio)}</strong></p>
             <p>Current RAM <strong>${formatPercent(node.current_memory_ratio)}</strong></p>
             <p>Current Disk <strong>${formatPercent(node.current_disk_ratio)}</strong></p>
-            <p>Average CPU <strong>${formatPercent(node.average_cpu_ratio)}</strong></p>
-            <p>Average RAM <strong>${formatPercent(node.average_memory_ratio)}</strong></p>
-            <p>Average Disk <strong>${formatPercent(node.average_disk_ratio)}</strong></p>
+            <p>Baseline CPU <strong>${formatPercent(node.average_cpu_ratio)}</strong></p>
+            <p>Baseline RAM <strong>${formatPercent(node.average_memory_ratio)}</strong></p>
+            <p>Baseline Disk <strong>${formatPercent(node.average_disk_ratio)}</strong></p>
             <p>Peak CPU <strong>${formatPercent(node.peak_cpu_ratio)}</strong></p>
             <p>Loadavg <strong>${formatLoadavg(node.current_loadavg)}</strong></p>
             ${node.fetch_error ? `<p class="fetch-warning">${escapeHtml(node.fetch_error)}</p>` : ""}

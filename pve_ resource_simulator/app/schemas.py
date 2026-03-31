@@ -45,8 +45,6 @@ class ServerInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_usage(self) -> "ServerInput":
-        if self.cpu_used > self.cpu_cores:
-            raise ValueError("cpu_used cannot exceed cpu_cores")
         if self.memory_used_gb > self.memory_gb:
             raise ValueError("memory_used_gb cannot exceed memory_gb")
         if self.disk_used_gb > self.disk_gb:
@@ -89,6 +87,8 @@ class HistoricalProfile(BaseModel):
     guest_count: int = Field(default=0, ge=0)
     average_cpu_ratio: float | None = Field(default=None, ge=0.0)
     average_memory_ratio: float | None = Field(default=None, ge=0.0)
+    trend_cpu_ratio: float | None = Field(default=None, ge=0.0)
+    trend_memory_ratio: float | None = Field(default=None, ge=0.0)
     peak_cpu_ratio: float | None = Field(default=None, ge=0.0)
     peak_memory_ratio: float | None = Field(default=None, ge=0.0)
     hourly: list["HourlyUsagePoint"] = Field(default_factory=list)
@@ -218,6 +218,9 @@ class HourlyUsagePoint(BaseModel):
     cpu_ratio: float | None = Field(default=None, ge=0.0)
     memory_ratio: float | None = Field(default=None, ge=0.0)
     disk_ratio: float | None = Field(default=None, ge=0.0)
+    peak_cpu_ratio: float | None = Field(default=None, ge=0.0)
+    peak_memory_ratio: float | None = Field(default=None, ge=0.0)
+    peak_disk_ratio: float | None = Field(default=None, ge=0.0)
     loadavg_1: float | None = Field(default=None, ge=0.0)
 
 
@@ -230,6 +233,9 @@ class ClusterUsageSummary(BaseModel):
     average_cpu_ratio: float | None = Field(default=None, ge=0.0)
     average_memory_ratio: float | None = Field(default=None, ge=0.0)
     average_disk_ratio: float | None = Field(default=None, ge=0.0)
+    trend_cpu_ratio: float | None = Field(default=None, ge=0.0)
+    trend_memory_ratio: float | None = Field(default=None, ge=0.0)
+    trend_disk_ratio: float | None = Field(default=None, ge=0.0)
     peak_cpu_ratio: float | None = Field(default=None, ge=0.0)
     peak_memory_ratio: float | None = Field(default=None, ge=0.0)
     peak_disk_ratio: float | None = Field(default=None, ge=0.0)
@@ -249,6 +255,9 @@ class NodeUsageSummary(BaseModel):
     average_cpu_ratio: float | None = Field(default=None, ge=0.0)
     average_memory_ratio: float | None = Field(default=None, ge=0.0)
     average_disk_ratio: float | None = Field(default=None, ge=0.0)
+    trend_cpu_ratio: float | None = Field(default=None, ge=0.0)
+    trend_memory_ratio: float | None = Field(default=None, ge=0.0)
+    trend_disk_ratio: float | None = Field(default=None, ge=0.0)
     peak_cpu_ratio: float | None = Field(default=None, ge=0.0)
     peak_memory_ratio: float | None = Field(default=None, ge=0.0)
     peak_disk_ratio: float | None = Field(default=None, ge=0.0)
@@ -273,6 +282,9 @@ class GuestUsageSummary(BaseModel):
     average_cpu_ratio: float | None = Field(default=None, ge=0.0)
     average_memory_ratio: float | None = Field(default=None, ge=0.0)
     average_disk_ratio: float | None = Field(default=None, ge=0.0)
+    trend_cpu_ratio: float | None = Field(default=None, ge=0.0)
+    trend_memory_ratio: float | None = Field(default=None, ge=0.0)
+    trend_disk_ratio: float | None = Field(default=None, ge=0.0)
     peak_cpu_ratio: float | None = Field(default=None, ge=0.0)
     peak_memory_ratio: float | None = Field(default=None, ge=0.0)
     peak_disk_ratio: float | None = Field(default=None, ge=0.0)
@@ -290,6 +302,9 @@ class GuestTypeUsageSummary(BaseModel):
     average_cpu_ratio: float | None = Field(default=None, ge=0.0)
     average_memory_ratio: float | None = Field(default=None, ge=0.0)
     average_disk_ratio: float | None = Field(default=None, ge=0.0)
+    trend_cpu_ratio: float | None = Field(default=None, ge=0.0)
+    trend_memory_ratio: float | None = Field(default=None, ge=0.0)
+    trend_disk_ratio: float | None = Field(default=None, ge=0.0)
     peak_cpu_ratio: float | None = Field(default=None, ge=0.0)
     peak_memory_ratio: float | None = Field(default=None, ge=0.0)
     peak_disk_ratio: float | None = Field(default=None, ge=0.0)

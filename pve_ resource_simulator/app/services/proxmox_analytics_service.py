@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import calendar
+import math
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -26,6 +27,8 @@ from app.schemas import (
 TIMEFRAME = "month"
 DEFAULT_TIMEOUT = 20.0
 ROOT_DIR = Path(__file__).resolve().parents[2]
+EWMA_ALPHA = 0.6
+P95_QUANTILE = 0.95
 
 
 class ProxmoxAnalyticsError(RuntimeError):
@@ -56,6 +59,9 @@ class _UsageSeries:
     average_cpu_ratio: float | None
     average_memory_ratio: float | None
     average_disk_ratio: float | None
+    trend_cpu_ratio: float | None
+    trend_memory_ratio: float | None
+    trend_disk_ratio: float | None
     peak_cpu_ratio: float | None
     peak_memory_ratio: float | None
     peak_disk_ratio: float | None
@@ -267,6 +273,9 @@ def build_monthly_analytics(
                 average_cpu_ratio=usage.average_cpu_ratio,
                 average_memory_ratio=usage.average_memory_ratio,
                 average_disk_ratio=usage.average_disk_ratio,
+                trend_cpu_ratio=usage.trend_cpu_ratio,
+                trend_memory_ratio=usage.trend_memory_ratio,
+                trend_disk_ratio=usage.trend_disk_ratio,
                 peak_cpu_ratio=usage.peak_cpu_ratio,
                 peak_memory_ratio=usage.peak_memory_ratio,
                 peak_disk_ratio=usage.peak_disk_ratio,
@@ -308,6 +317,9 @@ def build_monthly_analytics(
                 average_cpu_ratio=usage.average_cpu_ratio,
                 average_memory_ratio=usage.average_memory_ratio,
                 average_disk_ratio=usage.average_disk_ratio,
+                trend_cpu_ratio=usage.trend_cpu_ratio,
+                trend_memory_ratio=usage.trend_memory_ratio,
+                trend_disk_ratio=usage.trend_disk_ratio,
                 peak_cpu_ratio=usage.peak_cpu_ratio,
                 peak_memory_ratio=usage.peak_memory_ratio,
                 peak_disk_ratio=usage.peak_disk_ratio,
@@ -380,7 +392,7 @@ def _build_cluster_usage(
         ]
     )
 
-    hourly = _build_combined_hourly_usage(
+    usage = _build_combined_usage_series(
         list(node_rrd_map.values()),
         tz=tz,
         month_start=month_start,
@@ -393,13 +405,16 @@ def _build_cluster_usage(
         current_cpu_ratio=current_cpu,
         current_memory_ratio=current_memory,
         current_disk_ratio=current_disk,
-        average_cpu_ratio=_safe_mean([item.average_cpu_ratio for item in nodes]),
-        average_memory_ratio=_safe_mean([item.average_memory_ratio for item in nodes]),
-        average_disk_ratio=_safe_mean([item.average_disk_ratio for item in nodes]),
-        peak_cpu_ratio=_safe_max([item.peak_cpu_ratio for item in nodes]),
-        peak_memory_ratio=_safe_max([item.peak_memory_ratio for item in nodes]),
-        peak_disk_ratio=_safe_max([item.peak_disk_ratio for item in nodes]),
-        hourly=hourly,
+        average_cpu_ratio=usage.average_cpu_ratio,
+        average_memory_ratio=usage.average_memory_ratio,
+        average_disk_ratio=usage.average_disk_ratio,
+        trend_cpu_ratio=usage.trend_cpu_ratio,
+        trend_memory_ratio=usage.trend_memory_ratio,
+        trend_disk_ratio=usage.trend_disk_ratio,
+        peak_cpu_ratio=usage.peak_cpu_ratio,
+        peak_memory_ratio=usage.peak_memory_ratio,
+        peak_disk_ratio=usage.peak_disk_ratio,
+        hourly=usage.hourly,
     )
 
 
@@ -415,33 +430,67 @@ def _build_usage_series(
         for point in points
         if _point_in_month(point, tz=tz, month_start=month_start, month_end=month_end)
     ]
+    filtered.sort(key=lambda point: int(point.get("time") or 0))
+    return _build_usage_series_from_points(filtered, tz=tz)
 
+
+def _build_combined_usage_series(
+    series_list: list[list[dict[str, Any]]],
+    *,
+    tz: ZoneInfo,
+    month_start: datetime,
+    month_end: datetime,
+) -> _UsageSeries:
+    filtered: list[dict[str, Any]] = []
+    for points in series_list:
+        for point in points:
+            if not _point_in_month(point, tz=tz, month_start=month_start, month_end=month_end):
+                continue
+            filtered.append(point)
+    filtered.sort(key=lambda point: int(point.get("time") or 0))
+    return _build_usage_series_from_points(filtered, tz=tz)
+
+
+def _build_usage_series_from_points(
+    points: list[dict[str, Any]],
+    *,
+    tz: ZoneInfo,
+) -> _UsageSeries:
     buckets: dict[int, dict[str, list[Any]]] = {
         hour: {"cpu": [], "memory": [], "disk": [], "loadavg_1": []}
         for hour in range(24)
     }
-    cpu_values: list[float] = []
-    memory_values: list[float] = []
-    disk_values: list[float] = []
+    timeline_buckets: dict[int, dict[str, list[_WeightedValue]]] = {}
+    cpu_values: list[_WeightedValue] = []
+    memory_values: list[_WeightedValue] = []
+    disk_values: list[_WeightedValue] = []
     load_values: list[float] = []
 
-    for point in filtered:
-        hour = datetime.fromtimestamp(int(point["time"]), tz=timezone.utc).astimezone(tz).hour
+    for point in points:
+        timestamp = int(point["time"])
+        hour = datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone(tz).hour
+        timeline_entry = timeline_buckets.setdefault(
+            timestamp,
+            {"cpu": [], "memory": [], "disk": []},
+        )
 
         cpu_value = _cpu_ratio(point)
         if cpu_value is not None:
             buckets[hour]["cpu"].append(cpu_value)
-            cpu_values.append(cpu_value.value)
+            timeline_entry["cpu"].append(cpu_value)
+            cpu_values.append(cpu_value)
 
         memory_value = _memory_ratio(point)
         if memory_value is not None:
             buckets[hour]["memory"].append(memory_value)
-            memory_values.append(memory_value.value)
+            timeline_entry["memory"].append(memory_value)
+            memory_values.append(memory_value)
 
         disk_value = _disk_ratio(point)
         if disk_value is not None:
             buckets[hour]["disk"].append(disk_value)
-            disk_values.append(disk_value.value)
+            timeline_entry["disk"].append(disk_value)
+            disk_values.append(disk_value)
 
         load_value = _loadavg_1(point)
         if load_value is not None:
@@ -461,70 +510,39 @@ def _build_usage_series(
             cpu_ratio=_weighted_average(buckets[hour]["cpu"]),
             memory_ratio=_weighted_average(buckets[hour]["memory"]),
             disk_ratio=_weighted_average(buckets[hour]["disk"]),
+            peak_cpu_ratio=_weighted_percentile(buckets[hour]["cpu"], P95_QUANTILE),
+            peak_memory_ratio=_weighted_percentile(buckets[hour]["memory"], P95_QUANTILE),
+            peak_disk_ratio=_weighted_percentile(buckets[hour]["disk"], P95_QUANTILE),
             loadavg_1=_safe_mean(buckets[hour]["loadavg_1"]),
         )
         for hour in range(24)
+    ]
+    ordered_timestamps = sorted(timeline_buckets)
+    trend_cpu_values = [
+        _weighted_average(timeline_buckets[timestamp]["cpu"])
+        for timestamp in ordered_timestamps
+    ]
+    trend_memory_values = [
+        _weighted_average(timeline_buckets[timestamp]["memory"])
+        for timestamp in ordered_timestamps
+    ]
+    trend_disk_values = [
+        _weighted_average(timeline_buckets[timestamp]["disk"])
+        for timestamp in ordered_timestamps
     ]
     return _UsageSeries(
         hourly=hourly,
-        average_cpu_ratio=_safe_mean(cpu_values),
-        average_memory_ratio=_safe_mean(memory_values),
-        average_disk_ratio=_safe_mean(disk_values),
-        peak_cpu_ratio=_safe_max(cpu_values),
-        peak_memory_ratio=_safe_max(memory_values),
-        peak_disk_ratio=_safe_max(disk_values),
+        average_cpu_ratio=_weighted_average(cpu_values),
+        average_memory_ratio=_weighted_average(memory_values),
+        average_disk_ratio=_weighted_average(disk_values),
+        trend_cpu_ratio=_safe_ewma(trend_cpu_values),
+        trend_memory_ratio=_safe_ewma(trend_memory_values),
+        trend_disk_ratio=_safe_ewma(trend_disk_values),
+        peak_cpu_ratio=_weighted_percentile(cpu_values, P95_QUANTILE),
+        peak_memory_ratio=_weighted_percentile(memory_values, P95_QUANTILE),
+        peak_disk_ratio=_weighted_percentile(disk_values, P95_QUANTILE),
         average_loadavg_1=_safe_mean(load_values),
     )
-
-
-def _build_combined_hourly_usage(
-    series_list: list[list[dict[str, Any]]],
-    *,
-    tz: ZoneInfo,
-    month_start: datetime,
-    month_end: datetime,
-) -> list[HourlyUsagePoint]:
-    buckets: dict[int, dict[str, list[Any]]] = {
-        hour: {"cpu": [], "memory": [], "disk": [], "loadavg_1": []}
-        for hour in range(24)
-    }
-
-    for points in series_list:
-        for point in points:
-            if not _point_in_month(point, tz=tz, month_start=month_start, month_end=month_end):
-                continue
-
-            hour = datetime.fromtimestamp(int(point["time"]), tz=timezone.utc).astimezone(tz).hour
-            cpu_value = _cpu_ratio(point)
-            if cpu_value is not None:
-                buckets[hour]["cpu"].append(cpu_value)
-            memory_value = _memory_ratio(point)
-            if memory_value is not None:
-                buckets[hour]["memory"].append(memory_value)
-            disk_value = _disk_ratio(point)
-            if disk_value is not None:
-                buckets[hour]["disk"].append(disk_value)
-            load_value = _loadavg_1(point)
-            if load_value is not None:
-                buckets[hour]["loadavg_1"].append(load_value)
-
-    return [
-        HourlyUsagePoint(
-            hour=hour,
-            label=f"{hour:02d}:00",
-            sample_count=max(
-                len(buckets[hour]["cpu"]),
-                len(buckets[hour]["memory"]),
-                len(buckets[hour]["disk"]),
-                len(buckets[hour]["loadavg_1"]),
-            ),
-            cpu_ratio=_weighted_average(buckets[hour]["cpu"]),
-            memory_ratio=_weighted_average(buckets[hour]["memory"]),
-            disk_ratio=_weighted_average(buckets[hour]["disk"]),
-            loadavg_1=_safe_mean(buckets[hour]["loadavg_1"]),
-        )
-        for hour in range(24)
-    ]
 
 
 def _point_in_month(
@@ -647,15 +665,46 @@ def _weighted_average(values: list[_WeightedValue]) -> float | None:
     return sum(item.value * item.weight for item in values) / total_weight
 
 
-def _safe_mean(values: list[float | None]) -> float | None:
+def _weighted_percentile(
+    values: list[_WeightedValue],
+    percentile: float,
+) -> float | None:
+    if not values:
+        return None
+    normalized = sorted(
+        (item for item in values if item.weight > 0),
+        key=lambda item: item.value,
+    )
+    if not normalized:
+        return None
+    total_weight = sum(item.weight for item in normalized)
+    if total_weight <= 0:
+        return None
+    target_weight = max(0.0, min(percentile, 1.0)) * total_weight
+    cumulative_weight = 0.0
+    for item in normalized:
+        cumulative_weight += item.weight
+        if cumulative_weight + 1e-12 >= target_weight:
+            return item.value
+    return normalized[-1].value
+
+
+def _safe_ewma(
+    values: list[float | None],
+    *,
+    alpha: float = EWMA_ALPHA,
+) -> float | None:
     normalized = [value for value in values if value is not None]
     if not normalized:
         return None
-    return mean(normalized)
+    baseline = normalized[0]
+    for value in normalized[1:]:
+        baseline = (alpha * value) + ((1 - alpha) * baseline)
+    return baseline
 
 
-def _safe_mean_without_zero(values: list[float | None]) -> float | None:
-    normalized = [value for value in values if value is not None and value > 0]
+def _safe_mean(values: list[float | None]) -> float | None:
+    normalized = [value for value in values if value is not None]
     if not normalized:
         return None
     return mean(normalized)
@@ -666,6 +715,17 @@ def _safe_max(values: list[float | None]) -> float | None:
     if not normalized:
         return None
     return max(normalized)
+
+
+def _safe_percentile(
+    values: list[float | None],
+    percentile: float,
+) -> float | None:
+    normalized = sorted(value for value in values if value is not None)
+    if not normalized:
+        return None
+    rank = max(1, math.ceil(percentile * len(normalized)))
+    return normalized[min(rank, len(normalized)) - 1]
 
 
 def _guest_key(resource: dict[str, Any]) -> str:
@@ -747,12 +807,24 @@ def _build_guest_type_summaries(guests: list[GuestUsageSummary]) -> list[GuestTy
                 current_cpu_ratio=_safe_mean([item.current_cpu_ratio for item in items]),
                 current_memory_ratio=_safe_mean([item.current_memory_ratio for item in items]),
                 current_disk_ratio=_safe_mean([item.current_disk_ratio for item in items]),
-                average_cpu_ratio=_safe_mean_without_zero([item.average_cpu_ratio for item in items]),
-                average_memory_ratio=_safe_mean_without_zero([item.average_memory_ratio for item in items]),
-                average_disk_ratio=_safe_mean_without_zero([item.average_disk_ratio for item in items]),
-                peak_cpu_ratio=_safe_mean_without_zero([item.peak_cpu_ratio for item in items]),
-                peak_memory_ratio=_safe_mean_without_zero([item.peak_memory_ratio for item in items]),
-                peak_disk_ratio=_safe_mean_without_zero([item.peak_disk_ratio for item in items]),
+                average_cpu_ratio=_safe_mean([item.average_cpu_ratio for item in items]),
+                average_memory_ratio=_safe_mean([item.average_memory_ratio for item in items]),
+                average_disk_ratio=_safe_mean([item.average_disk_ratio for item in items]),
+                trend_cpu_ratio=_safe_mean([item.trend_cpu_ratio for item in items]),
+                trend_memory_ratio=_safe_mean([item.trend_memory_ratio for item in items]),
+                trend_disk_ratio=_safe_mean([item.trend_disk_ratio for item in items]),
+                peak_cpu_ratio=_safe_percentile(
+                    [item.peak_cpu_ratio for item in items],
+                    P95_QUANTILE,
+                ),
+                peak_memory_ratio=_safe_percentile(
+                    [item.peak_memory_ratio for item in items],
+                    P95_QUANTILE,
+                ),
+                peak_disk_ratio=_safe_percentile(
+                    [item.peak_disk_ratio for item in items],
+                    P95_QUANTILE,
+                ),
                 sample_names=[item.name for item in items[:4]],
                 hourly=_merge_guest_hourly(items),
             )
@@ -769,6 +841,8 @@ def build_historical_profiles(guest_types: list[GuestTypeUsageSummary]) -> list[
             guest_count=item.guest_count,
             average_cpu_ratio=item.average_cpu_ratio,
             average_memory_ratio=item.average_memory_ratio,
+            trend_cpu_ratio=item.trend_cpu_ratio,
+            trend_memory_ratio=item.trend_memory_ratio,
             peak_cpu_ratio=item.peak_cpu_ratio,
             peak_memory_ratio=item.peak_memory_ratio,
             hourly=item.hourly,
@@ -791,9 +865,21 @@ def _merge_guest_hourly(items: list[GuestUsageSummary]) -> list[HourlyUsagePoint
                 hour=hour,
                 label=f"{hour:02d}:00",
                 sample_count=sum(point.sample_count for point in group),
-                cpu_ratio=_safe_mean_without_zero([point.cpu_ratio for point in group]),
-                memory_ratio=_safe_mean_without_zero([point.memory_ratio for point in group]),
-                disk_ratio=_safe_mean_without_zero([point.disk_ratio for point in group]),
+                cpu_ratio=_safe_mean([point.cpu_ratio for point in group]),
+                memory_ratio=_safe_mean([point.memory_ratio for point in group]),
+                disk_ratio=_safe_mean([point.disk_ratio for point in group]),
+                peak_cpu_ratio=_safe_percentile(
+                    [point.peak_cpu_ratio for point in group],
+                    P95_QUANTILE,
+                ),
+                peak_memory_ratio=_safe_percentile(
+                    [point.peak_memory_ratio for point in group],
+                    P95_QUANTILE,
+                ),
+                peak_disk_ratio=_safe_percentile(
+                    [point.peak_disk_ratio for point in group],
+                    P95_QUANTILE,
+                ),
                 loadavg_1=None,
             )
         )

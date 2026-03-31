@@ -459,8 +459,8 @@ function renderServerBoard() {
           <div class="server-footer">
             <h3>${escapeHtml(server.name)}</h3>
             <p class="server-meta">
-              CPU ${formatCompact(server.remaining?.cpu_cores)} free ·
-              RAM ${formatCompact(server.remaining?.memory_gb)} free ·
+              CPU ${formatCompact(server.remaining?.cpu_cores)} schedulable ·
+              RAM ${formatCompact(server.remaining?.memory_gb)} safe ·
               Disk ${formatCompact(server.remaining?.disk_gb)} free
             </p>
           </div>

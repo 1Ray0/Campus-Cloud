@@ -28,16 +28,37 @@ from app.services import proxmox_analytics_service
 
 
 EPSILON = 1e-9
+CPU_OVERCOMMIT_RATIO = 4.0
+RAM_USABLE_RATIO = 0.9
+CPU_SAFE_SHARE = 0.7
+CPU_MAX_SHARE = 1.2
+DISK_SAFE_SHARE = 0.75
+DISK_MAX_SHARE = 0.95
+CPU_SHARE_WEIGHT = 1.0
+MEMORY_SHARE_WEIGHT = 1.2
+DISK_SHARE_WEIGHT = 1.5
+GPU_SHARE_WEIGHT = 3.0
+CPU_CONTENTION_WEIGHT = 2.0
+MEMORY_OVERFLOW_WEIGHT = 5.0
+DISK_CONTENTION_WEIGHT = 1.5
+MIGRATION_COST = 0.15
+LOCAL_REBALANCE_MAX_MOVES = 2
 CPU_MARGIN = 1.4
 RAM_MARGIN = 1.15
 CPU_FLOOR_RATIO = 0.35
 RAM_FLOOR_RATIO = 0.5
 CPU_PEAK_MARGIN = 1.1
 RAM_PEAK_MARGIN = 1.05
-CPU_PEAK_WARN_SHARE = 0.85
-CPU_PEAK_HIGH_SHARE = 0.9
+CPU_PEAK_WARN_SHARE = CPU_SAFE_SHARE
+CPU_PEAK_HIGH_SHARE = CPU_MAX_SHARE
 RAM_PEAK_WARN_SHARE = 0.8
 RAM_PEAK_HIGH_SHARE = 0.85
+
+
+@dataclass
+class _PlacedVm:
+    template_id: str
+    template: VMTemplate
 
 
 @dataclass
@@ -51,7 +72,7 @@ class _WorkingServer:
     used_memory: float
     used_disk: float
     used_gpu: float
-    placed_vms: list[str] = field(default_factory=list)
+    placed_vms: list[_PlacedVm] = field(default_factory=list)
 
     @property
     def placement_count(self) -> int:
@@ -139,7 +160,7 @@ async def build_live_scenario() -> DefaultScenarioResponse:
         note=(
             f"Live PVE scenario from {analytics.host}. "
             "Current node usage is loaded from Proxmox, and new reservations use "
-            "historical same-type CPU/RAM averages when available."
+            "historical same-type CPU/RAM weighted mean baselines and P95 peaks when available."
         ),
         source="live",
         historical_profiles=proxmox_analytics_service.build_historical_profiles(
@@ -245,18 +266,17 @@ def _run_hour_simulation(
             summary=summary,
         )
 
-    previous_assignments: dict[str, str] = {}
+    assignment_map: dict[str, str] = {}
     final_servers = _snapshot_servers(servers)
     for index, template in enumerate(effective_requested_templates, start=1):
-        current_templates = effective_requested_templates[:index]
-        allocation = _rebalance_allocation(
-            base_servers=request.servers,
-            templates=current_templates,
+        previous_assignments = dict(assignment_map)
+        server_name = _place_template(
+            servers=servers,
+            template=template,
             allow_rebalance=request.allow_rebalance,
+            assignment_map=assignment_map,
         )
-        final_servers = allocation.snapshots
-        failed_templates = allocation.failed_templates
-        server_name = allocation.assignment_map.get(template.id)
+        final_servers = _snapshot_servers(servers)
 
         if server_name is not None:
             _update_calculation_row(
@@ -284,7 +304,7 @@ def _run_hour_simulation(
                     template=template,
                     server_name=server_name,
                     previous_assignments=previous_assignments,
-                    current_assignments=allocation.assignment_map,
+                    current_assignments=assignment_map,
                 ),
             )
             placements.append(placement)
@@ -297,6 +317,7 @@ def _run_hour_simulation(
                 )
             )
         else:
+            failed_templates.append(template)
             _update_calculation_row(
                 calculations=calculations,
                 vm_template_id=template.id,
@@ -311,7 +332,6 @@ def _run_hour_simulation(
                     servers=final_servers,
                 )
             )
-        previous_assignments = allocation.assignment_map
 
     if not placements and failed_templates:
         stop_reason = "No server can fit the active reservations in this hour."
@@ -333,7 +353,7 @@ def _run_hour_simulation(
     )
     _reconcile_calculations(
         calculations=calculations,
-        final_assignment_map=previous_assignments,
+        final_assignment_map=assignment_map,
         final_servers=final_servers,
     )
     return HourlySimulation(
@@ -383,9 +403,9 @@ def _cluster_peak_hours(hourly_points: list) -> list[int]:
     peak_hours: list[int] = []
     for point in hourly_points:
         score = max(
-            point.cpu_ratio or 0.0,
-            point.memory_ratio or 0.0,
-            point.disk_ratio or 0.0,
+            point.peak_cpu_ratio or point.cpu_ratio or 0.0,
+            point.peak_memory_ratio or point.memory_ratio or 0.0,
+            point.peak_disk_ratio or point.disk_ratio or 0.0,
         )
         if score <= 0:
             continue
@@ -400,9 +420,9 @@ def _cluster_peak_hours(hourly_points: list) -> list[int]:
 def _cluster_hourly_peak_values(hourly_points: list) -> dict[str, float | None]:
     return {
         str(point.hour): max(
-            point.cpu_ratio or 0.0,
-            point.memory_ratio or 0.0,
-            point.disk_ratio or 0.0,
+            point.peak_cpu_ratio or point.cpu_ratio or 0.0,
+            point.peak_memory_ratio or point.memory_ratio or 0.0,
+            point.peak_disk_ratio or point.disk_ratio or 0.0,
         )
         for point in hourly_points
     }
@@ -420,6 +440,14 @@ def _to_working_server(server: ServerInput) -> _WorkingServer:
         used_disk=float(server.disk_used_gb),
         used_gpu=float(server.gpu_used),
     )
+
+
+def _cpu_schedulable_capacity(total_cpu: float) -> float:
+    return max(total_cpu * CPU_OVERCOMMIT_RATIO, 0.0)
+
+
+def _memory_schedulable_capacity(total_memory: float) -> float:
+    return max(total_memory * RAM_USABLE_RATIO, 0.0)
 
 
 def _resolve_requested_templates(
@@ -461,10 +489,20 @@ def _effective_template_for_hour(
         if hour_point and hour_point.memory_ratio is not None
         else profile.average_memory_ratio
     )
-    peak_cpu_ratio = profile.peak_cpu_ratio if profile.peak_cpu_ratio is not None else cpu_ratio
-    peak_memory_ratio = (
-        profile.peak_memory_ratio if profile.peak_memory_ratio is not None else memory_ratio
+    peak_cpu_ratio = (
+        hour_point.peak_cpu_ratio
+        if hour_point and hour_point.peak_cpu_ratio is not None
+        else profile.peak_cpu_ratio
     )
+    peak_memory_ratio = (
+        hour_point.peak_memory_ratio
+        if hour_point and hour_point.peak_memory_ratio is not None
+        else profile.peak_memory_ratio
+    )
+    if peak_cpu_ratio is None:
+        peak_cpu_ratio = cpu_ratio
+    if peak_memory_ratio is None:
+        peak_memory_ratio = memory_ratio
 
     effective_cpu = _effective_requested_value(
         requested=template.cpu_cores,
@@ -609,7 +647,7 @@ def _peak_risk_for_row(
     )
     peak_memory_share = _share(
         server.used.memory_gb - row.effective_memory_gb + row.peak_memory_gb,
-        server.total.memory_gb,
+        _memory_schedulable_capacity(server.total.memory_gb),
     )
 
     if peak_cpu_share >= CPU_PEAK_HIGH_SHARE or peak_memory_share >= RAM_PEAK_HIGH_SHARE:
@@ -620,40 +658,101 @@ def _peak_risk_for_row(
 
 
 @dataclass
-class _AllocationResult:
-    snapshots: list[ServerSnapshot]
+class _LocalRebalanceResult:
+    servers: list[_WorkingServer]
     assignment_map: dict[str, str]
-    failed_templates: list[VMTemplate]
 
 
-def _rebalance_allocation(
+def _place_template(
     *,
-    base_servers: list[ServerInput],
-    templates: list[VMTemplate],
+    servers: list[_WorkingServer],
+    template: VMTemplate,
     allow_rebalance: bool,
-) -> _AllocationResult:
-    working_servers = [_to_working_server(server) for server in base_servers]
-    ordered_templates = (
-        sorted(templates, key=_template_sort_key, reverse=True)
-        if allow_rebalance
-        else list(templates)
-    )
-    assignment_map: dict[str, str] = {}
-    failed_templates: list[VMTemplate] = []
-
-    for template in ordered_templates:
-        choice = _choose_server(working_servers, template)
-        if choice is None:
-            failed_templates.append(template)
-            continue
+    assignment_map: dict[str, str],
+) -> str | None:
+    choice = _choose_server(servers, template)
+    if choice is not None:
         _apply_template(choice, template)
         assignment_map[template.id] = choice.name
+        return choice.name
 
-    return _AllocationResult(
-        snapshots=_snapshot_servers(working_servers),
+    if not allow_rebalance:
+        return None
+
+    rebalance_result = _local_rebalance(
+        servers=servers,
+        template=template,
         assignment_map=assignment_map,
-        failed_templates=failed_templates,
     )
+    if rebalance_result is None:
+        return None
+
+    servers[:] = rebalance_result.servers
+    assignment_map.clear()
+    assignment_map.update(rebalance_result.assignment_map)
+    return assignment_map.get(template.id)
+
+
+def _local_rebalance(
+    *,
+    servers: list[_WorkingServer],
+    template: VMTemplate,
+    assignment_map: dict[str, str],
+) -> _LocalRebalanceResult | None:
+    for max_moves in range(1, LOCAL_REBALANCE_MAX_MOVES + 1):
+        result = _search_local_rebalance(
+            servers=_clone_servers(servers),
+            template=template,
+            assignment_map=dict(assignment_map),
+            remaining_moves=max_moves,
+            moved_template_ids=set(),
+        )
+        if result is not None:
+            return result
+    return None
+
+
+def _search_local_rebalance(
+    *,
+    servers: list[_WorkingServer],
+    template: VMTemplate,
+    assignment_map: dict[str, str],
+    remaining_moves: int,
+    moved_template_ids: set[str],
+) -> _LocalRebalanceResult | None:
+    choice = _choose_server(servers, template)
+    if choice is not None:
+        _apply_template(choice, template)
+        assignment_map[template.id] = choice.name
+        return _LocalRebalanceResult(servers=servers, assignment_map=assignment_map)
+
+    if remaining_moves <= 0:
+        return None
+
+    for source in _ordered_rebalance_sources(servers):
+        for placed_vm in _ordered_move_candidates(source):
+            if placed_vm.template_id in moved_template_ids:
+                continue
+            for target in _ordered_move_targets(servers, source, placed_vm.template):
+                next_servers = _clone_servers(servers)
+                next_assignment_map = dict(assignment_map)
+                next_source = _server_by_name(next_servers, source.name)
+                next_target = _server_by_name(next_servers, target.name)
+                moved_vm = _remove_placed_vm(next_source, placed_vm.template_id)
+                if moved_vm is None:
+                    continue
+                _apply_existing_vm(next_target, moved_vm)
+                next_assignment_map[moved_vm.template_id] = next_target.name
+                result = _search_local_rebalance(
+                    servers=next_servers,
+                    template=template,
+                    assignment_map=next_assignment_map,
+                    remaining_moves=remaining_moves - 1,
+                    moved_template_ids=moved_template_ids | {moved_vm.template_id},
+                )
+                if result is not None:
+                    return result
+    return None
 
 
 def _snapshot_servers(servers: list[_WorkingServer]) -> list[ServerSnapshot]:
@@ -662,7 +761,12 @@ def _snapshot_servers(servers: list[_WorkingServer]) -> list[ServerSnapshot]:
 
 
 def _snapshot_server(server: _WorkingServer) -> ServerSnapshot:
-    vm_counts = Counter(server.placed_vms)
+    vm_counts = Counter(item.template.name for item in server.placed_vms)
+    cpu_remaining = max(_cpu_schedulable_capacity(server.total_cpu) - server.used_cpu, 0.0)
+    memory_remaining = max(
+        _memory_schedulable_capacity(server.total_memory) - server.used_memory,
+        0.0,
+    )
     return ServerSnapshot(
         name=server.name,
         total=ResourceUsage(
@@ -678,16 +782,16 @@ def _snapshot_server(server: _WorkingServer) -> ServerSnapshot:
             gpu_count=round(server.used_gpu, 2),
         ),
         remaining=ResourceUsage(
-            cpu_cores=round(server.total_cpu - server.used_cpu, 2),
-            memory_gb=round(server.total_memory - server.used_memory, 2),
-            disk_gb=round(server.total_disk - server.used_disk, 2),
-            gpu_count=round(server.total_gpu - server.used_gpu, 2),
+            cpu_cores=round(cpu_remaining, 2),
+            memory_gb=round(memory_remaining, 2),
+            disk_gb=round(max(server.total_disk - server.used_disk, 0.0), 2),
+            gpu_count=round(max(server.total_gpu - server.used_gpu, 0.0), 2),
         ),
         shares=_server_shares(server),
         dominant_share=round(_dominant_share(server), 4),
         average_share=round(_average_share(server), 4),
         placement_count=server.placement_count,
-        placed_vms=list(server.placed_vms),
+        placed_vms=[item.template.name for item in server.placed_vms],
         vm_stack=[
             VmStackItem(name=name, count=count)
             for name, count in sorted(vm_counts.items(), key=lambda item: (-item[1], item[0]))
@@ -697,8 +801,11 @@ def _snapshot_server(server: _WorkingServer) -> ServerSnapshot:
 
 def _server_shares(server: _WorkingServer) -> ResourceShares:
     return ResourceShares(
-        cpu=round(_share(server.used_cpu, server.total_cpu), 4),
-        memory=round(_share(server.used_memory, server.total_memory), 4),
+        cpu=round(_share(server.used_cpu, _cpu_schedulable_capacity(server.total_cpu)), 4),
+        memory=round(
+            _share(server.used_memory, _memory_schedulable_capacity(server.total_memory)),
+            4,
+        ),
         disk=round(_share(server.used_disk, server.total_disk), 4),
         gpu=round(_share(server.used_gpu, server.total_gpu), 4),
     )
@@ -711,30 +818,42 @@ def _share(used: float, total: float) -> float:
 
 
 def _dominant_share(server: _WorkingServer) -> float:
-    shares = _share_values(server)
+    shares = _weighted_share_values(server)
     return max(shares) if shares else 0.0
 
 
 def _average_share(server: _WorkingServer) -> float:
-    shares = _share_values(server)
+    shares = _weighted_share_values(server)
     return mean(shares) if shares else 0.0
 
 
-def _share_values(server: _WorkingServer) -> list[float]:
+def _weighted_share_values(server: _WorkingServer) -> list[float]:
     values = [
-        _share(server.used_cpu, server.total_cpu),
-        _share(server.used_memory, server.total_memory),
-        _share(server.used_disk, server.total_disk),
+        _weighted_share(
+            _share(server.used_cpu, _cpu_schedulable_capacity(server.total_cpu)),
+            CPU_SHARE_WEIGHT,
+        ),
+        _weighted_share(
+            _share(server.used_memory, _memory_schedulable_capacity(server.total_memory)),
+            MEMORY_SHARE_WEIGHT,
+        ),
+        _weighted_share(_share(server.used_disk, server.total_disk), DISK_SHARE_WEIGHT),
     ]
     if server.total_gpu > EPSILON:
-        values.append(_share(server.used_gpu, server.total_gpu))
+        values.append(
+            _weighted_share(_share(server.used_gpu, server.total_gpu), GPU_SHARE_WEIGHT)
+        )
     return values
 
 
+def _weighted_share(share: float, weight: float) -> float:
+    return share * weight
+
+
 def _can_fit(server: _WorkingServer, template: VMTemplate) -> bool:
-    if (server.total_cpu - server.used_cpu) + EPSILON < template.cpu_cores:
+    if (_cpu_schedulable_capacity(server.total_cpu) - server.used_cpu) + EPSILON < template.cpu_cores:
         return False
-    if (server.total_memory - server.used_memory) + EPSILON < template.memory_gb:
+    if (_memory_schedulable_capacity(server.total_memory) - server.used_memory) + EPSILON < template.memory_gb:
         return False
     if (server.total_disk - server.used_disk) + EPSILON < template.disk_gb:
         return False
@@ -753,11 +872,10 @@ def _choose_server(
 
     return min(
         candidates,
-        key=lambda server: (
-            _projected_dominant_share(server, template),
-            _projected_average_share(server, template),
-            server.placement_count,
-            server.name,
+        key=lambda server: _placement_sort_key(
+            server,
+            template,
+            migration_cost=0.0,
         ),
     )
 
@@ -772,13 +890,195 @@ def _projected_average_share(server: _WorkingServer, template: VMTemplate) -> fl
 
 def _projected_share_values(server: _WorkingServer, template: VMTemplate) -> list[float]:
     values = [
-        _share(server.used_cpu + template.cpu_cores, server.total_cpu),
-        _share(server.used_memory + template.memory_gb, server.total_memory),
-        _share(server.used_disk + template.disk_gb, server.total_disk),
+        _weighted_share(
+            _share(
+                server.used_cpu + template.cpu_cores,
+                _cpu_schedulable_capacity(server.total_cpu),
+            ),
+            CPU_SHARE_WEIGHT,
+        ),
+        _weighted_share(
+            _share(
+                server.used_memory + template.memory_gb,
+                _memory_schedulable_capacity(server.total_memory),
+            ),
+            MEMORY_SHARE_WEIGHT,
+        ),
+        _weighted_share(
+            _share(server.used_disk + template.disk_gb, server.total_disk),
+            DISK_SHARE_WEIGHT,
+        ),
     ]
     if server.total_gpu > EPSILON or template.gpu_count > EPSILON:
-        values.append(_share(server.used_gpu + template.gpu_count, server.total_gpu))
+        values.append(
+            _weighted_share(
+                _share(server.used_gpu + template.gpu_count, server.total_gpu),
+                GPU_SHARE_WEIGHT,
+            )
+        )
     return values
+
+
+def _placement_sort_key(
+    server: _WorkingServer,
+    template: VMTemplate,
+    *,
+    migration_cost: float,
+) -> tuple[float, float, float, int, str]:
+    projected_dominant_share = _projected_dominant_share(server, template)
+    projected_average_share = _projected_average_share(server, template)
+    projected_cpu_share = _projected_physical_cpu_share(server, template)
+    penalty = _resource_penalty(server, template)
+    score = projected_dominant_share + penalty + migration_cost
+    return (
+        score,
+        projected_average_share,
+        projected_cpu_share,
+        server.placement_count,
+        server.name,
+    )
+
+
+def _resource_penalty(server: _WorkingServer, template: VMTemplate) -> float:
+    projected_cpu_share = _projected_physical_cpu_share(server, template)
+    projected_memory_share = _projected_memory_policy_share(server, template)
+    projected_disk_share = _projected_disk_share(server, template)
+    cpu_penalty = _cpu_contention_penalty(projected_cpu_share)
+    memory_penalty = 1.0 if projected_memory_share > 1.0 + EPSILON else 0.0
+    disk_penalty = _disk_latency_penalty(projected_disk_share)
+    return (
+        (cpu_penalty * CPU_CONTENTION_WEIGHT)
+        + (memory_penalty * MEMORY_OVERFLOW_WEIGHT)
+        + (disk_penalty * DISK_CONTENTION_WEIGHT)
+    )
+
+
+def _cpu_contention_penalty(share: float) -> float:
+    if share <= CPU_SAFE_SHARE:
+        return 0.0
+    if share >= CPU_MAX_SHARE:
+        return 1.0
+    return (share - CPU_SAFE_SHARE) / (CPU_MAX_SHARE - CPU_SAFE_SHARE)
+
+
+def _disk_latency_penalty(share: float) -> float:
+    if share <= DISK_SAFE_SHARE:
+        return 0.0
+    if share >= DISK_MAX_SHARE:
+        return 1.0
+    return (share - DISK_SAFE_SHARE) / (DISK_MAX_SHARE - DISK_SAFE_SHARE)
+
+
+def _projected_physical_cpu_share(server: _WorkingServer, template: VMTemplate) -> float:
+    return _share(server.used_cpu + template.cpu_cores, server.total_cpu)
+
+
+def _projected_memory_policy_share(server: _WorkingServer, template: VMTemplate) -> float:
+    return _share(
+        server.used_memory + template.memory_gb,
+        _memory_schedulable_capacity(server.total_memory),
+    )
+
+
+def _projected_disk_share(server: _WorkingServer, template: VMTemplate) -> float:
+    return _share(server.used_disk + template.disk_gb, server.total_disk)
+
+
+def _clone_servers(servers: list[_WorkingServer]) -> list[_WorkingServer]:
+    return [
+        _WorkingServer(
+            name=server.name,
+            total_cpu=server.total_cpu,
+            total_memory=server.total_memory,
+            total_disk=server.total_disk,
+            total_gpu=server.total_gpu,
+            used_cpu=server.used_cpu,
+            used_memory=server.used_memory,
+            used_disk=server.used_disk,
+            used_gpu=server.used_gpu,
+            placed_vms=[
+                _PlacedVm(
+                    template_id=item.template_id,
+                    template=item.template.model_copy(deep=True),
+                )
+                for item in server.placed_vms
+            ],
+        )
+        for server in servers
+    ]
+
+
+def _server_by_name(servers: list[_WorkingServer], server_name: str) -> _WorkingServer:
+    for server in servers:
+        if server.name == server_name:
+            return server
+    raise ValueError(f"Server '{server_name}' was not found.")
+
+
+def _ordered_rebalance_sources(servers: list[_WorkingServer]) -> list[_WorkingServer]:
+    return sorted(
+        [server for server in servers if server.placed_vms],
+        key=lambda server: (
+            -_dominant_share(server),
+            -_share(server.used_memory, _memory_schedulable_capacity(server.total_memory)),
+            -_share(server.used_cpu, server.total_cpu),
+            server.name,
+        ),
+    )
+
+
+def _ordered_move_candidates(server: _WorkingServer) -> list[_PlacedVm]:
+    return sorted(
+        server.placed_vms,
+        key=lambda item: (
+            _template_resource_value(item.template, "gpu"),
+            _template_resource_value(item.template, "disk"),
+            _template_resource_value(item.template, "memory"),
+            _template_resource_value(item.template, "cpu"),
+        ),
+        reverse=True,
+    )
+
+
+def _ordered_move_targets(
+    servers: list[_WorkingServer],
+    source_server: _WorkingServer,
+    template: VMTemplate,
+) -> list[_WorkingServer]:
+    candidates = [
+        server
+        for server in servers
+        if server.name != source_server.name and _can_fit(server, template)
+    ]
+    return sorted(
+        candidates,
+        key=lambda server: _placement_sort_key(
+            server,
+            template,
+            migration_cost=MIGRATION_COST,
+        ),
+    )
+
+
+def _remove_placed_vm(server: _WorkingServer, template_id: str) -> _PlacedVm | None:
+    for index, placed_vm in enumerate(server.placed_vms):
+        if placed_vm.template_id != template_id:
+            continue
+        server.placed_vms.pop(index)
+        server.used_cpu -= placed_vm.template.cpu_cores
+        server.used_memory -= placed_vm.template.memory_gb
+        server.used_disk -= placed_vm.template.disk_gb
+        server.used_gpu -= placed_vm.template.gpu_count
+        return placed_vm
+    return None
+
+
+def _apply_existing_vm(server: _WorkingServer, placed_vm: _PlacedVm) -> None:
+    server.used_cpu += placed_vm.template.cpu_cores
+    server.used_memory += placed_vm.template.memory_gb
+    server.used_disk += placed_vm.template.disk_gb
+    server.used_gpu += placed_vm.template.gpu_count
+    server.placed_vms.append(placed_vm)
 
 
 def _apply_template(server: _WorkingServer, template: VMTemplate) -> None:
@@ -786,13 +1086,18 @@ def _apply_template(server: _WorkingServer, template: VMTemplate) -> None:
     server.used_memory += template.memory_gb
     server.used_disk += template.disk_gb
     server.used_gpu += template.gpu_count
-    server.placed_vms.append(template.name)
+    server.placed_vms.append(
+        _PlacedVm(
+            template_id=template.id,
+            template=template.model_copy(deep=True),
+        )
+    )
 
 
 def _build_reason(server: _WorkingServer, template: VMTemplate) -> str:
     shares = _server_shares(server)
     return (
-        f"Placed on {server.name} because its projected dominant share is lowest. "
+        f"Placed on {server.name} because its projected weighted share and contention score are lowest. "
         f"After placement: CPU {shares.cpu:.0%}, RAM {shares.memory:.0%}, "
         f"Disk {shares.disk:.0%}, GPU {shares.gpu:.0%}."
     )
@@ -835,8 +1140,12 @@ def _build_summary(
             placed_by_server.get(placement.server_name, 0) + 1
         )
 
-    cluster_cpu_total = sum(server.total.cpu_cores for server in final_servers)
-    cluster_memory_total = sum(server.total.memory_gb for server in final_servers)
+    cluster_cpu_policy_total = sum(
+        _cpu_schedulable_capacity(server.total.cpu_cores) for server in final_servers
+    )
+    cluster_memory_policy_total = sum(
+        _memory_schedulable_capacity(server.total.memory_gb) for server in final_servers
+    )
     cluster_disk_total = sum(server.total.disk_gb for server in final_servers)
     cluster_gpu_total = sum(server.total.gpu_count for server in final_servers)
 
@@ -846,8 +1155,8 @@ def _build_summary(
     cluster_gpu_used = sum(server.used.gpu_count for server in final_servers)
 
     cluster_shares = ResourceShares(
-        cpu=round(_share(cluster_cpu_used, cluster_cpu_total), 4),
-        memory=round(_share(cluster_memory_used, cluster_memory_total), 4),
+        cpu=round(_share(cluster_cpu_used, cluster_cpu_policy_total), 4),
+        memory=round(_share(cluster_memory_used, cluster_memory_policy_total), 4),
         disk=round(_share(cluster_disk_used, cluster_disk_total), 4),
         gpu=round(_share(cluster_gpu_used, cluster_gpu_total), 4),
     )
@@ -875,7 +1184,7 @@ def _build_summary(
     else:
         narrative = (
             f"Placed {len(placements)} of {len(requested_templates)} requested VMs. "
-            f"Cluster utilization is CPU {cluster_shares.cpu:.0%}, RAM {cluster_shares.memory:.0%}, "
+            f"Cluster policy utilization is CPU {cluster_shares.cpu:.0%}, RAM {cluster_shares.memory:.0%}, "
             f"Disk {cluster_shares.disk:.0%}. "
             + (
                 f"The tightest node is {most_loaded.name} at dominant share "
@@ -939,10 +1248,10 @@ def _find_bottleneck_resource(server: ServerSnapshot | None) -> str | None:
     if server is None:
         return None
     shares = {
-        "cpu": server.shares.cpu,
-        "memory": server.shares.memory,
-        "disk": server.shares.disk,
-        "gpu": server.shares.gpu,
+        "cpu": server.shares.cpu * CPU_SHARE_WEIGHT,
+        "memory": server.shares.memory * MEMORY_SHARE_WEIGHT,
+        "disk": server.shares.disk * DISK_SHARE_WEIGHT,
+        "gpu": server.shares.gpu * GPU_SHARE_WEIGHT,
     }
     return max(shares.items(), key=lambda item: item[1])[0]
 

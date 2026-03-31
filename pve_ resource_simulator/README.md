@@ -8,8 +8,41 @@ Standalone FastAPI prototype for testing PVE-style resource scheduling.
 - Seed each server with existing used resources.
 - Add multiple VM templates with no fixed placement limit.
 - Auto-place workloads until no enabled VM template fits anywhere.
-- Pick the destination server using the minimum dominant-share rule.
+- Pick the destination server using weighted dominant share plus contention penalties.
+- Allow CPU overcommit while keeping a RAM safety buffer.
+- Use historical same-type hourly weighted mean baselines and P95 peaks when analytics exist.
+- Export historical `average`, `trend`, and `peak` signals from monthly analytics.
+- Try a small local rebalance before declaring `no_fit`.
 - Visualize every placement step through a static UI.
+
+## Current Placement Model
+
+The simulator currently separates three layers:
+
+- `average_*`: weighted mean utilization from monthly analytics.
+- `trend_*`: EWMA trend derived from time-ordered weighted samples.
+- `peak_*`: weighted P95 utilization.
+
+For live placement, the simulator currently uses:
+
+- Hour-specific `hourly[*].cpu_ratio` and `hourly[*].memory_ratio` first.
+- Fallback to profile `average_cpu_ratio` and `average_memory_ratio`.
+- Peak guard from hour-specific `peak_*`, then profile `peak_*`.
+
+Effective requested resources are calculated conservatively:
+
+- CPU: historical ratio with margin `1.4`, floored at `35%` of requested, capped by requested.
+- RAM: historical ratio with margin `1.15`, floored at `50%` of requested, capped by requested.
+- Disk and GPU: currently use requested values directly.
+
+Server choice is based on the lowest projected score after placement:
+
+- weighted dominant share across CPU, RAM, Disk, and optional GPU
+- contention penalty for CPU and Disk
+- hard overflow penalty for RAM
+- tie-breakers: average weighted share, physical CPU share, placement count, server name
+
+If no node fits directly and `allow_rebalance=true`, the simulator searches a local rebalance of up to 2 moves and applies a migration cost when scoring move targets.
 
 ## Run
 

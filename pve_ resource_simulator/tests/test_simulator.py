@@ -117,16 +117,16 @@ def test_dominant_share_chooses_lower_post_share_server() -> None:
 
     result = run_simulation(request)
 
-    assert result.hours[8].placements[0].server_name == "pve-b"
-    assert result.hours[8].summary.recommendation_target == "pve-b"
+    assert result.hours[8].placements[0].server_name == "pve-a"
+    assert result.hours[8].summary.recommendation_target == "pve-a"
 
 
-def test_rebalance_can_free_space_for_large_vm_in_active_hour() -> None:
+def test_local_rebalance_can_free_space_for_large_vm_in_active_hour() -> None:
     request = SimulationRequest(
         servers=[
-            ServerInput(name="pve-a", cpu_cores=24, memory_gb=96, disk_gb=1200),
-            ServerInput(name="pve-b", cpu_cores=16, memory_gb=64, disk_gb=900),
-            ServerInput(name="pve-c", cpu_cores=32, memory_gb=128, disk_gb=1600),
+            ServerInput(name="pve-a", cpu_cores=8, memory_gb=12, disk_gb=200),
+            ServerInput(name="pve-b", cpu_cores=8, memory_gb=12, disk_gb=200),
+            ServerInput(name="pve-c", cpu_cores=8, memory_gb=12, disk_gb=200),
         ],
         vm_templates=[
             VMTemplate(
@@ -134,7 +134,7 @@ def test_rebalance_can_free_space_for_large_vm_in_active_hour() -> None:
                 name="vm-01",
                 cpu_cores=2,
                 memory_gb=4,
-                disk_gb=40,
+                disk_gb=20,
                 active_hours=[12],
             ),
             VMTemplate(
@@ -142,7 +142,7 @@ def test_rebalance_can_free_space_for_large_vm_in_active_hour() -> None:
                 name="vm-02",
                 cpu_cores=2,
                 memory_gb=4,
-                disk_gb=40,
+                disk_gb=20,
                 active_hours=[12],
             ),
             VMTemplate(
@@ -150,7 +150,7 @@ def test_rebalance_can_free_space_for_large_vm_in_active_hour() -> None:
                 name="vm-03",
                 cpu_cores=2,
                 memory_gb=4,
-                disk_gb=40,
+                disk_gb=20,
                 active_hours=[12],
             ),
             VMTemplate(
@@ -158,15 +158,15 @@ def test_rebalance_can_free_space_for_large_vm_in_active_hour() -> None:
                 name="vm-04",
                 cpu_cores=2,
                 memory_gb=4,
-                disk_gb=40,
+                disk_gb=20,
                 active_hours=[12],
             ),
             VMTemplate(
                 id="vm-05",
                 name="vm-05",
-                cpu_cores=30,
-                memory_gb=4,
-                disk_gb=40,
+                cpu_cores=2,
+                memory_gb=8,
+                disk_gb=20,
                 active_hours=[12],
             ),
         ],
@@ -178,8 +178,7 @@ def test_rebalance_can_free_space_for_large_vm_in_active_hour() -> None:
     hour_12 = result.hours[12]
     assert hour_12.summary.total_placements == 5
     assert not hour_12.summary.failed_vm_names
-    pve_c = next(server for server in hour_12.states[-1].servers if server.name == "pve-c")
-    assert any(item.name == "vm-05" for item in pve_c.vm_stack)
+    assert any(item.vm_name == "vm-05" for item in hour_12.placements)
     assert any("Auto-rebalanced" in state.latest_placement.reason for state in hour_12.states if state.latest_placement)
 
 
@@ -289,6 +288,56 @@ def test_historical_profile_reduces_effective_cpu_and_memory_when_available() ->
     assert result.hours[9].summary.total_placements == 2
 
 
+def test_cpu_overcommit_allows_placement_beyond_physical_core_count() -> None:
+    request = SimulationRequest(
+        servers=[ServerInput(name="pve-a", cpu_cores=4, memory_gb=32, disk_gb=200)],
+        vm_templates=[
+            VMTemplate(
+                id="vm-1",
+                name="VM 1",
+                cpu_cores=3,
+                memory_gb=2,
+                disk_gb=20,
+                active_hours=[9],
+            ),
+            VMTemplate(
+                id="vm-2",
+                name="VM 2",
+                cpu_cores=3,
+                memory_gb=2,
+                disk_gb=20,
+                active_hours=[9],
+            ),
+        ],
+    )
+
+    result = run_simulation(request)
+
+    assert result.hours[9].summary.total_placements == 2
+    assert not result.hours[9].summary.failed_vm_names
+
+
+def test_ram_safety_buffer_blocks_placement_before_physical_ram_is_full() -> None:
+    request = SimulationRequest(
+        servers=[ServerInput(name="pve-a", cpu_cores=8, memory_gb=16, disk_gb=200)],
+        vm_templates=[
+            VMTemplate(
+                id="vm-1",
+                name="VM 1",
+                cpu_cores=2,
+                memory_gb=15,
+                disk_gb=20,
+                active_hours=[9],
+            ),
+        ],
+    )
+
+    result = run_simulation(request)
+
+    assert result.hours[9].summary.total_placements == 0
+    assert result.hours[9].summary.failed_vm_names == ["VM 1"]
+
+
 def test_peak_guard_marks_high_risk_when_peak_pushes_node_near_limit() -> None:
     request = SimulationRequest(
         servers=[
@@ -335,6 +384,51 @@ def test_peak_guard_marks_high_risk_when_peak_pushes_node_near_limit() -> None:
     assert calculation.peak_cpu_cores == pytest.approx(1.87)
     assert calculation.peak_memory_gb == pytest.approx(1.89)
     assert calculation.peak_risk == "high"
+
+
+def test_hourly_peak_ratio_overrides_profile_peak_for_same_hour() -> None:
+    request = SimulationRequest(
+        servers=[ServerInput(name="pve-a", cpu_cores=8, memory_gb=8, disk_gb=200)],
+        vm_templates=[
+            VMTemplate(
+                id="vm-1",
+                name="VM 1",
+                cpu_cores=2,
+                memory_gb=2,
+                disk_gb=20,
+                active_hours=[9],
+            ),
+        ],
+        historical_profiles=[
+            HistoricalProfile(
+                type_label="2 vCPU / 2 GiB",
+                configured_cpu_cores=2,
+                configured_memory_gb=2,
+                guest_count=3,
+                average_cpu_ratio=0.35,
+                average_memory_ratio=0.5,
+                peak_cpu_ratio=0.95,
+                peak_memory_ratio=0.95,
+                hourly=[
+                    HourlyUsagePoint(
+                        hour=9,
+                        label="09:00",
+                        sample_count=3,
+                        cpu_ratio=0.35,
+                        memory_ratio=0.5,
+                        peak_cpu_ratio=0.5,
+                        peak_memory_ratio=0.6,
+                    ),
+                ],
+            )
+        ],
+    )
+
+    result = run_simulation(request)
+    calculation = result.hours[9].calculations[0]
+
+    assert calculation.peak_cpu_cores == pytest.approx(1.1)
+    assert calculation.peak_memory_gb == pytest.approx(1.26)
 
 
 def test_build_live_scenario_uses_online_nodes_and_profiles(monkeypatch) -> None:

@@ -127,9 +127,15 @@ def test_build_monthly_analytics_groups_current_month_by_hour() -> None:
     assert payload.cluster.current_cpu_ratio == 0.25
     assert payload.nodes[0].average_loadavg_1 == pytest.approx(0.85)
     assert payload.guests[0].average_cpu_ratio == pytest.approx(0.35)
+    assert payload.guests[0].trend_cpu_ratio == pytest.approx(0.38)
+    assert payload.nodes[0].trend_cpu_ratio == pytest.approx(0.52)
+    assert payload.cluster.trend_cpu_ratio == pytest.approx(0.52)
     assert payload.guests[0].peak_memory_ratio == pytest.approx(0.625)
     assert payload.cluster.hourly[9].cpu_ratio == pytest.approx(0.4)
     assert payload.cluster.hourly[10].cpu_ratio == pytest.approx(0.6)
+    assert payload.guests[0].hourly[9].peak_cpu_ratio == pytest.approx(0.2)
+    assert payload.guests[0].hourly[10].peak_cpu_ratio == pytest.approx(0.5)
+    assert payload.cluster.hourly[9].peak_memory_ratio == pytest.approx(0.625)
     assert payload.cluster.hourly[8].cpu_ratio is None
 
 
@@ -279,7 +285,7 @@ def test_build_monthly_analytics_groups_guests_by_cpu_and_memory() -> None:
     assert group_4_2.guest_count == 1
 
 
-def test_guest_type_averages_ignore_zero_ratios() -> None:
+def test_guest_type_averages_include_zero_ratios() -> None:
     zone = ZoneInfo("Asia/Taipei")
     now = datetime(2026, 3, 30, 12, 0, tzinfo=zone)
     hour_9 = int(datetime(2026, 3, 2, 9, 0, tzinfo=zone).timestamp())
@@ -339,8 +345,10 @@ def test_guest_type_averages_ignore_zero_ratios() -> None:
     )
 
     guest_type = next(item for item in payload.guest_types if item.type_label == "2 vCPU / 2 GiB")
-    assert guest_type.average_cpu_ratio == pytest.approx(0.4)
-    assert guest_type.average_memory_ratio == pytest.approx(0.5)
-    assert guest_type.average_disk_ratio == pytest.approx(0.2)
-    assert guest_type.hourly[9].cpu_ratio == pytest.approx(0.4)
-    assert guest_type.hourly[9].memory_ratio == pytest.approx(0.5)
+    assert guest_type.average_cpu_ratio == pytest.approx(0.2)
+    assert guest_type.average_memory_ratio == pytest.approx(0.25)
+    assert guest_type.average_disk_ratio == pytest.approx(0.1)
+    assert guest_type.trend_cpu_ratio == pytest.approx(0.2)
+    assert guest_type.trend_memory_ratio == pytest.approx(0.25)
+    assert guest_type.hourly[9].cpu_ratio == pytest.approx(0.2)
+    assert guest_type.hourly[9].memory_ratio == pytest.approx(0.25)
