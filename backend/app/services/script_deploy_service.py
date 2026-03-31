@@ -4,11 +4,12 @@
 部署完成後自動刪除腳本；失敗時完全回滾（銷毀已建立的容器）。
 """
 
+import io
 import logging
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import paramiko
 from sqlmodel import Session
@@ -46,10 +47,23 @@ class DeploymentTask:
 _tasks: dict[str, DeploymentTask] = {}
 _tasks_lock = threading.Lock()
 
+# 已完成/失敗任務的保留時間
+_TASK_TTL = timedelta(hours=2)
+
 
 def _store_task(task: DeploymentTask) -> None:
     with _tasks_lock:
         _tasks[task.task_id] = task
+        # 順帶清理過期的已完成/失敗任務，避免無限佔用記憶體
+        now = datetime.now()
+        expired = [
+            tid
+            for tid, t in _tasks.items()
+            if t.status in ("completed", "failed")
+            and now - t.created_at > _TASK_TTL
+        ]
+        for tid in expired:
+            del _tasks[tid]
 
 
 def get_task(task_id: str) -> DeploymentTask | None:
@@ -70,7 +84,9 @@ def _ssh_connect() -> paramiko.SSHClient:
     ssh_user = cfg.user.split("@")[0] if "@" in cfg.user else cfg.user
 
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    # WarningPolicy 會記錄未知主機金鑰但仍允許連線，比 AutoAddPolicy 更安全（有審計軌跡）。
+    # 如需更嚴格的保護，請在部署環境設定 known_hosts 並改用 RejectPolicy。
+    client.set_missing_host_key_policy(paramiko.WarningPolicy())
     client.connect(
         hostname=host,
         port=22,
@@ -105,8 +121,8 @@ def _ssh_exec_streaming(
     _, stdout_ch, stderr_ch = client.exec_command(command, timeout=timeout)
     channel = stdout_ch.channel
 
-    stdout_buf: list[str] = []
-    stderr_buf: list[str] = []
+    stdout_buf = io.StringIO()
+    stderr_buf = io.StringIO()
     start = time.monotonic()
 
     while True:
@@ -120,19 +136,19 @@ def _ssh_exec_streaming(
         if readable:
             if channel.recv_ready():
                 chunk = channel.recv(4096).decode(errors="replace")
-                stdout_buf.append(chunk)
-                task.output = "".join(stdout_buf)
+                stdout_buf.write(chunk)
+                task.output = stdout_buf.getvalue()
                 _store_task(task)
 
             if channel.recv_stderr_ready():
                 chunk = channel.recv_stderr(4096).decode(errors="replace")
-                stderr_buf.append(chunk)
+                stderr_buf.write(chunk)
 
         if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
             break
 
     exit_code = channel.recv_exit_status()
-    return exit_code, "".join(stdout_buf), "".join(stderr_buf)
+    return exit_code, stdout_buf.getvalue(), stderr_buf.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +380,8 @@ def _run_deployment(task: DeploymentTask, request_data: dict) -> None:  # noqa: 
         _store_task(task)
 
         deploy_cmd = f'{inline_env} bash -c "$(cat {temp_script})"'
-        logger.info("Deploy command: %s", deploy_cmd)
+        # 注意：不記錄完整的 deploy_cmd，以免敏感資訊（例如密碼）洩漏到日誌
+        logger.info("開始執行無人值守部署腳本: %s", request_data["script_path"])
         exit_code, stdout, stderr = _ssh_exec_streaming(
             client, deploy_cmd, task, timeout=900
         )

@@ -79,6 +79,8 @@ def register_deployed_resource(
     task = script_deploy_service.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="找不到該部署任務")
+    if task.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="無權操作此部署任務")
     if task.status != "completed":
         raise HTTPException(status_code=400, detail="任務尚未完成或已失敗")
     if task.vmid is None:
