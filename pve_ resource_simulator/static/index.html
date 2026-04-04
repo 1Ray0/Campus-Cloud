@@ -53,6 +53,19 @@
               <input id="vm-quantity" type="number" min="1" step="1" value="1" />
             </label>
 
+            <label>
+              <span>Storage Scope</span>
+              <select id="vm-storage-scope">
+                <option value="any" selected>Any</option>
+                <option value="local">Local only</option>
+                <option value="shared">Shared only</option>
+              </select>
+            </label>
+            <label>
+              <span>Preferred Storage</span>
+              <input id="vm-preferred-storage" type="text" placeholder="e.g. local-lvm (optional)" />
+            </label>
+
             <section class="slot-picker">
               <div class="slot-head">
                 <p class="field-title">Schedule</p>
@@ -76,6 +89,47 @@
           </form>
 
           <p id="error-banner" class="error-banner" hidden></p>
+
+          <div class="section-head compact">
+            <div>
+              <p class="section-kicker">Placement Strategy</p>
+              <h2>Scheduler</h2>
+            </div>
+          </div>
+          <label class="strategy-row">
+            <span>Strategy</span>
+            <select id="strategy-select">
+              <option value="dominant_share_min">Dominant Share Min</option>
+              <option value="priority_dominant_share">Priority + Dominant Share</option>
+            </select>
+          </label>
+          <label class="strategy-row">
+            <span>CPU Overcommit</span>
+            <input id="cpu-overcommit-ratio" type="number" min="1.0" max="8.0" step="0.5" value="2.0" />
+          </label>
+          <label class="strategy-row">
+            <span>Disk Overcommit</span>
+            <input id="disk-overcommit-ratio" type="number" min="1.0" max="5.0" step="0.1" value="1.0" />
+          </label>
+          <p class="helper-text">CPU：2.0 = 允許配置 2 倍實體核心數。Disk：1.0 = 不超額，1.5 = 150%。兩者皆先塞正常空間、不足才超額，且平均分散節點。</p>
+
+          <div class="section-head compact">
+            <div>
+              <p class="section-kicker">Node Priority</p>
+              <h2>PVE Nodes</h2>
+            </div>
+            <p class="helper-text">1 = most preferred, 10 = least preferred</p>
+          </div>
+          <div id="node-priority-list" class="node-priority-list"></div>
+
+          <div class="section-head compact">
+            <div>
+              <p class="section-kicker">Storage Pools</p>
+              <h2>Storage Config</h2>
+            </div>
+            <p class="helper-text">Shared 容量只計一次</p>
+          </div>
+          <div id="storage-config-panel" class="storage-config-panel"></div>
 
           <div class="section-head compact">
             <div>
@@ -117,6 +171,7 @@
                     <th>Risk</th>
                     <th>Status</th>
                     <th>Node</th>
+                    <th>Storage</th>
                   </tr>
                 </thead>
                 <tbody id="calculation-table-body"></tbody>
@@ -132,6 +187,7 @@
             <div class="timeline-meta">
               <p id="step-label">Placement steps</p>
               <p id="step-caption">Watch how each VM or LXC reservation is placed onto a PVE node over time.</p>
+              <div id="relief-actions" class="relief-panel"></div>
             </div>
           </div>
 
@@ -140,6 +196,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=20260404-1" defer></script>
+    <script src="/static/app.js?v=20260404-10" defer></script>
   </body>
 </html>
