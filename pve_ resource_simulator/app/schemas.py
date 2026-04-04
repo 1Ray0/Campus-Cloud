@@ -7,6 +7,27 @@ from pydantic import BaseModel, Field, model_validator
 
 HOURS_IN_DAY = 24
 ResourceType = Literal["qemu", "lxc"]
+StorageSpeedTier = Literal["nvme", "ssd", "hdd", "unknown"]
+
+
+class StorageInfo(BaseModel):
+    """Per-node Proxmox storage pool snapshot used for placement decisions."""
+    storage: str
+    type: str | None = None
+    total_gb: float = Field(default=0.0, ge=0.0)
+    used_gb: float = Field(default=0.0, ge=0.0)
+    avail_gb: float = Field(default=0.0, ge=0.0)
+    used_fraction: float = Field(default=0.0, ge=0.0)
+    # Content capability flags (derived from Proxmox `content` field)
+    can_vm: bool = False      # "images" in content — can store VM disk images
+    can_lxc: bool = False     # "rootdir" in content — can store LXC root fs
+    can_iso: bool = False     # "iso" in content — ISO image repository
+    can_backup: bool = False  # "backup" in content — backup target
+    is_shared: bool = False   # Proxmox shared=1 (NFS, Ceph, RBD …)
+    active: bool = True       # Proxmox reports storage as active
+    enabled: bool = True      # User toggle — False = exclude from placement
+    speed_tier: StorageSpeedTier = "unknown"   # 速度等級：nvme > ssd > hdd
+    user_priority: int = Field(default=5, ge=1, le=10)  # 使用者自訂優先級 1=最高
 
 
 class ResourceUsage(BaseModel):
@@ -45,6 +66,8 @@ class ServerInput(BaseModel):
     gpu_used: float = Field(default=0.0, ge=0.0)
     current_loadavg_1: float | None = Field(default=None, ge=0.0)
     average_loadavg_1: float | None = Field(default=None, ge=0.0)
+    priority: int = Field(default=5, ge=1, le=10)
+    storages: list[StorageInfo] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_usage(self) -> "ServerInput":
@@ -55,6 +78,9 @@ class ServerInput(BaseModel):
         if self.gpu_used > self.gpu_count:
             raise ValueError("gpu_used cannot exceed gpu_count")
         return self
+
+
+StorageScopePreference = Literal["local", "shared", "any"]
 
 
 class VMTemplate(BaseModel):
@@ -68,6 +94,8 @@ class VMTemplate(BaseModel):
     count: int = Field(default=1, ge=1, le=512)
     active_hours: list[int] = Field(default_factory=lambda: list(range(HOURS_IN_DAY)))
     enabled: bool = True
+    storage_scope_preference: StorageScopePreference = "any"
+    preferred_storage_name: str | None = None
 
     @model_validator(mode="after")
     def validate_active_hours(self) -> "VMTemplate":
@@ -107,7 +135,23 @@ class SimulationRequest(BaseModel):
     selected_vm_template_id: str | None = None
     allow_rebalance: bool = True
     max_steps: int = Field(default=200, ge=1, le=2000)
-    strategy: Literal["dominant_share_min"] = "dominant_share_min"
+    strategy: Literal["dominant_share_min", "priority_dominant_share"] = "dominant_share_min"
+    cpu_overcommit_ratio: float = Field(
+        default=2.0, ge=1.0, le=8.0,
+        description=(
+            "CPU overcommit multiplier. 2.0 = allow scheduling up to 2× physical CPU cores. "
+            "Normal placement (within physical cores) is always preferred first; "
+            "overcommit kicks in only when no node can fit within physical capacity."
+        ),
+    )
+    disk_overcommit_ratio: float = Field(
+        default=1.0, ge=1.0, le=5.0,
+        description=(
+            "Thick-provisioning overcommit multiplier for storage pools. "
+            "1.0 = no overcommit (default). 1.5 = allow allocating up to 150% of physical capacity. "
+            "Overcommit only kicks in after all normal avail_gb is exhausted."
+        ),
+    )
 
 
 class ServerSnapshot(BaseModel):
@@ -121,6 +165,8 @@ class ServerSnapshot(BaseModel):
     placement_count: int = Field(default=0, ge=0)
     current_loadavg_1: float | None = Field(default=None, ge=0.0)
     average_loadavg_1: float | None = Field(default=None, ge=0.0)
+    priority: int = Field(default=5, ge=1, le=10)
+    storages: list[StorageInfo] = Field(default_factory=list)
     placed_vms: list[str] = Field(default_factory=list)
     vm_stack: list[VmStackItem] = Field(default_factory=list)
 
@@ -152,6 +198,9 @@ class SimulationCalculationRow(BaseModel):
     cpu_ratio: float | None = Field(default=None, ge=0.0)
     memory_ratio: float | None = Field(default=None, ge=0.0)
     placed_server_name: str | None = None
+    placed_storage_pool: str | None = None
+    is_cpu_overcommit: bool = False
+    is_disk_overcommit: bool = False
     placement_status: str
     peak_risk: str = "pending"
 
@@ -272,6 +321,7 @@ class NodeUsageSummary(BaseModel):
     current_loadavg: list[float] = Field(default_factory=list)
     average_loadavg_1: float | None = Field(default=None, ge=0.0)
     hourly: list[HourlyUsagePoint] = Field(default_factory=list)
+    storages: list[StorageInfo] = Field(default_factory=list)
 
 
 class GuestUsageSummary(BaseModel):

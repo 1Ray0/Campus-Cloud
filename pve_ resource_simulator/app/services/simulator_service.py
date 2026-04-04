@@ -21,6 +21,8 @@ from app.schemas import (
     SimulationResponse,
     SimulationState,
     SimulationSummary,
+    StorageInfo,
+    StorageSpeedTier,
     VMTemplate,
     VmStackItem,
 )
@@ -67,10 +69,38 @@ LXC_CPU_PEAK_MARGIN = 1.05
 LXC_RAM_PEAK_MARGIN = 1.02
 
 
+_SPEED_RANK: dict[str, int] = {"nvme": 0, "ssd": 1, "hdd": 2, "unknown": 3}
+
+
+@dataclass
+class _StorageState:
+    """Mutable per-placement-run snapshot of a single storage pool."""
+    storage: str
+    can_vm: bool
+    can_lxc: bool
+    can_iso: bool
+    can_backup: bool
+    is_shared: bool
+    speed_tier: str   # "nvme" | "ssd" | "hdd" | "unknown"
+    user_priority: int  # 1-10, lower = more preferred
+    total_gb: float
+    avail_gb: float   # decreases as VMs are placed onto this pool
+    active: bool
+    enabled: bool     # user toggle — False = excluded from placement
+    placed_count: int = 0              # total VMs placed on this pool (normal placements)
+    # Overcommit tracking (disk_overcommit_ratio > 1.0 only)
+    overcommit_avail_gb: float = 0.0   # extra allocatable space beyond physical avail_gb
+    overcommit_placed_count: int = 0   # number of VMs placed via overcommit on this pool
+
+
 @dataclass
 class _PlacedVm:
     template_id: str
     template: VMTemplate
+    storage_pool: str | None = None    # name of the pool used for disk
+    is_cpu_overcommit: bool = False    # True when CPU placement exceeded physical cores
+    is_overcommit: bool = False        # True when disk placement consumed overcommit capacity
+    overcommit_disk_gb: float = 0.0    # how many GB were taken from the overcommit bucket
 
 
 @dataclass
@@ -86,6 +116,9 @@ class _WorkingServer:
     used_gpu: float
     current_loadavg_1: float | None = None
     average_loadavg_1: float | None = None
+    priority: int = 5
+    cpu_overcommit_ratio: float = CPU_OVERCOMMIT_RATIO
+    storage_pools: list[_StorageState] = field(default_factory=list)
     placed_vms: list[_PlacedVm] = field(default_factory=list)
 
     @property
@@ -106,6 +139,7 @@ def build_default_scenario() -> DefaultScenarioResponse:
                 memory_used_gb=0,
                 disk_used_gb=0,
                 gpu_used=0,
+                priority=1,
             ),
             ServerInput(
                 name="pve-b",
@@ -117,6 +151,7 @@ def build_default_scenario() -> DefaultScenarioResponse:
                 memory_used_gb=0,
                 disk_used_gb=0,
                 gpu_used=0,
+                priority=3,
             ),
             ServerInput(
                 name="pve-c",
@@ -128,6 +163,7 @@ def build_default_scenario() -> DefaultScenarioResponse:
                 memory_used_gb=0,
                 disk_used_gb=0,
                 gpu_used=0,
+                priority=5,
             ),
         ],
         vm_templates=[],
@@ -145,26 +181,47 @@ def build_default_scenario() -> DefaultScenarioResponse:
 
 async def build_live_scenario() -> DefaultScenarioResponse:
     analytics = await proxmox_analytics_service.fetch_monthly_analytics()
-    servers = [
-        ServerInput(
-            name=node.name,
-            cpu_cores=node.total_cpu_cores,
-            memory_gb=node.total_memory_gb,
-            disk_gb=node.total_disk_gb,
-            gpu_count=0,
-            cpu_used=(node.total_cpu_cores or 0.0) * (node.current_cpu_ratio or 0.0),
-            memory_used_gb=(node.total_memory_gb or 0.0) * (node.current_memory_ratio or 0.0),
-            disk_used_gb=(node.total_disk_gb or 0.0) * (node.current_disk_ratio or 0.0),
-            gpu_used=0,
-            current_loadavg_1=(node.current_loadavg[0] if node.current_loadavg else None),
-            average_loadavg_1=node.average_loadavg_1,
+    servers = []
+    for node in analytics.nodes:
+        if node.status != "online":
+            continue
+        if node.total_cpu_cores is None or node.total_memory_gb is None:
+            continue
+        # Only count LOCAL VM-compatible pools for node disk budget.
+        # Shared pools (NFS, Ceph, RBD …) are counted once in the simulator
+        # via shared pool registry, not per-node.
+        local_vm_storages = [
+            s for s in node.storages if s.active and (s.can_vm or s.can_lxc) and not s.is_shared
+        ]
+        any_vm_storages = [s for s in node.storages if s.active and (s.can_vm or s.can_lxc)]
+        if local_vm_storages:
+            disk_total = sum(s.total_gb for s in local_vm_storages)
+            disk_used = sum(s.used_gb for s in local_vm_storages)
+        elif any_vm_storages:
+            # All storage is shared — use the first node's shared pool capacity as fallback
+            disk_total = sum(s.total_gb for s in any_vm_storages)
+            disk_used = sum(s.used_gb for s in any_vm_storages)
+        elif node.total_disk_gb is not None:
+            disk_total = node.total_disk_gb
+            disk_used = (node.total_disk_gb or 0.0) * (node.current_disk_ratio or 0.0)
+        else:
+            continue
+        servers.append(
+            ServerInput(
+                name=node.name,
+                cpu_cores=node.total_cpu_cores,
+                memory_gb=node.total_memory_gb,
+                disk_gb=disk_total,
+                gpu_count=0,
+                cpu_used=(node.total_cpu_cores or 0.0) * (node.current_cpu_ratio or 0.0),
+                memory_used_gb=(node.total_memory_gb or 0.0) * (node.current_memory_ratio or 0.0),
+                disk_used_gb=disk_used,
+                gpu_used=0,
+                current_loadavg_1=(node.current_loadavg[0] if node.current_loadavg else None),
+                average_loadavg_1=node.average_loadavg_1,
+                storages=node.storages,
+            )
         )
-        for node in analytics.nodes
-        if node.status == "online"
-        and node.total_cpu_cores is not None
-        and node.total_memory_gb is not None
-        and node.total_disk_gb is not None
-    ]
     if not servers:
         raise proxmox_analytics_service.ProxmoxAnalyticsError(
             "No online Proxmox nodes could be converted into a live simulator scenario."
@@ -253,7 +310,11 @@ def _run_hour_simulation(
         )
         for item in effective_template_results
     ]
-    servers = [_to_working_server(item) for item in request.servers]
+    servers = _build_servers(
+        request.servers,
+        cpu_overcommit_ratio=request.cpu_overcommit_ratio,
+        disk_overcommit_ratio=request.disk_overcommit_ratio,
+    )
     placements: list[PlacementRecord] = []
     failed_templates: list[VMTemplate] = []
     states: list[SimulationState] = [
@@ -286,6 +347,7 @@ def _run_hour_simulation(
             summary=summary,
         )
 
+    use_node_priority = request.strategy == "priority_dominant_share"
     assignment_map: dict[str, str] = {}
     final_servers = _snapshot_servers(servers)
     for index, template in enumerate(effective_requested_templates, start=1):
@@ -295,15 +357,25 @@ def _run_hour_simulation(
             template=template,
             allow_rebalance=request.allow_rebalance,
             assignment_map=assignment_map,
+            use_node_priority=use_node_priority,
         )
         final_servers = _snapshot_servers(servers)
 
         if server_name is not None:
+            placed_server = _server_by_name(servers, server_name)
+            placed_pv = next(
+                (pv for pv in reversed(placed_server.placed_vms)
+                 if pv.template_id == template.id),
+                None,
+            )
             _update_calculation_row(
                 calculations=calculations,
                 vm_template_id=template.id,
                 placed_server_name=server_name,
                 placement_status="placed",
+                placed_storage_pool=placed_pv.storage_pool if placed_pv else None,
+                is_cpu_overcommit=placed_pv.is_cpu_overcommit if placed_pv else False,
+                is_disk_overcommit=placed_pv.is_overcommit if placed_pv else False,
             )
             placement = PlacementRecord(
                 step=index,
@@ -479,24 +551,104 @@ def _smoothed_cluster_peak_scores(hourly_points: list) -> dict[int, float]:
     return smoothed_scores
 
 
-def _to_working_server(server: ServerInput) -> _WorkingServer:
-    return _WorkingServer(
-        name=server.name,
-        total_cpu=float(server.cpu_cores),
-        total_memory=float(server.memory_gb),
-        total_disk=float(server.disk_gb),
-        total_gpu=float(server.gpu_count),
-        used_cpu=float(server.cpu_used),
-        used_memory=float(server.memory_used_gb),
-        used_disk=float(server.disk_used_gb),
-        used_gpu=float(server.gpu_used),
-        current_loadavg_1=server.current_loadavg_1,
-        average_loadavg_1=server.average_loadavg_1,
-    )
+def _build_servers(
+    server_inputs: list[ServerInput],
+    cpu_overcommit_ratio: float = CPU_OVERCOMMIT_RATIO,
+    disk_overcommit_ratio: float = 1.0,
+) -> list[_WorkingServer]:
+    """Build _WorkingServer list from inputs.
+
+    Shared storage pools (is_shared=True) are represented as a single shared
+    Python object referenced by every node that can access them.  This ensures
+    that when a VM is placed on a shared pool, the capacity deduction is
+    visible to ALL nodes — preventing double-counting.
+
+    total_disk / used_disk on each server only reflect LOCAL pools so that the
+    scheduler sees realistic per-node disk budgets.
+
+    When disk_overcommit_ratio > 1.0, each pool gets overcommit_avail_gb =
+    total_gb * (ratio - 1.0).  Overcommit space is only consumed after the
+    pool's normal avail_gb is fully exhausted.
+    """
+    shared_registry: dict[str, _StorageState] = {}
+    servers: list[_WorkingServer] = []
+    extra_ratio = max(disk_overcommit_ratio - 1.0, 0.0)
+
+    for inp in server_inputs:
+        storage_pools: list[_StorageState] = []
+        local_total = 0.0
+        local_used = 0.0
+
+        for s in inp.storages:
+            if s.is_shared:
+                if s.storage not in shared_registry:
+                    shared_registry[s.storage] = _StorageState(
+                        storage=s.storage,
+                        can_vm=s.can_vm,
+                        can_lxc=s.can_lxc,
+                        can_iso=s.can_iso,
+                        can_backup=s.can_backup,
+                        is_shared=True,
+                        speed_tier=s.speed_tier,
+                        user_priority=s.user_priority,
+                        total_gb=s.total_gb,
+                        avail_gb=s.avail_gb,
+                        active=s.active,
+                        enabled=s.enabled,
+                        overcommit_avail_gb=s.total_gb * extra_ratio,
+                    )
+                storage_pools.append(shared_registry[s.storage])
+            else:
+                pool = _StorageState(
+                    storage=s.storage,
+                    can_vm=s.can_vm,
+                    can_lxc=s.can_lxc,
+                    can_iso=s.can_iso,
+                    can_backup=s.can_backup,
+                    is_shared=False,
+                    speed_tier=s.speed_tier,
+                    user_priority=s.user_priority,
+                    total_gb=s.total_gb,
+                    avail_gb=s.avail_gb,
+                    active=s.active,
+                    enabled=s.enabled,
+                    overcommit_avail_gb=s.total_gb * extra_ratio,
+                )
+                storage_pools.append(pool)
+                local_total += s.total_gb
+                local_used += s.used_gb
+
+        # If storage list is provided, derive disk from local pools only.
+        if inp.storages:
+            total_disk = local_total if local_total > 0 else float(inp.disk_gb)
+            used_disk = local_used
+        else:
+            total_disk = float(inp.disk_gb)
+            used_disk = float(inp.disk_used_gb)
+
+        servers.append(
+            _WorkingServer(
+                name=inp.name,
+                total_cpu=float(inp.cpu_cores),
+                total_memory=float(inp.memory_gb),
+                total_disk=total_disk,
+                total_gpu=float(inp.gpu_count),
+                used_cpu=float(inp.cpu_used),
+                used_memory=float(inp.memory_used_gb),
+                used_disk=used_disk,
+                used_gpu=float(inp.gpu_used),
+                current_loadavg_1=inp.current_loadavg_1,
+                average_loadavg_1=inp.average_loadavg_1,
+                priority=inp.priority,
+                cpu_overcommit_ratio=cpu_overcommit_ratio,
+                storage_pools=storage_pools,
+            )
+        )
+    return servers
 
 
-def _cpu_schedulable_capacity(total_cpu: float) -> float:
-    return max(total_cpu * CPU_OVERCOMMIT_RATIO, 0.0)
+def _cpu_schedulable_capacity(total_cpu: float, ratio: float = CPU_OVERCOMMIT_RATIO) -> float:
+    return max(total_cpu * ratio, 0.0)
 
 
 def _memory_schedulable_capacity(total_memory: float) -> float:
@@ -778,10 +930,16 @@ def _update_calculation_row(
     vm_template_id: str,
     placed_server_name: str | None,
     placement_status: str,
+    placed_storage_pool: str | None = None,
+    is_cpu_overcommit: bool = False,
+    is_disk_overcommit: bool = False,
 ) -> None:
     for row in calculations:
         if row.vm_template_id == vm_template_id:
             row.placed_server_name = placed_server_name
+            row.placed_storage_pool = placed_storage_pool
+            row.is_cpu_overcommit = is_cpu_overcommit
+            row.is_disk_overcommit = is_disk_overcommit
             row.placement_status = placement_status
             return
 
@@ -841,8 +999,9 @@ def _place_template(
     template: VMTemplate,
     allow_rebalance: bool,
     assignment_map: dict[str, str],
+    use_node_priority: bool = False,
 ) -> str | None:
-    choice = _choose_server(servers, template)
+    choice = _choose_server(servers, template, use_node_priority=use_node_priority)
     if choice is not None:
         _apply_template(choice, template)
         assignment_map[template.id] = choice.name
@@ -855,6 +1014,7 @@ def _place_template(
         servers=servers,
         template=template,
         assignment_map=assignment_map,
+        use_node_priority=use_node_priority,
     )
     if rebalance_result is None:
         return None
@@ -870,6 +1030,7 @@ def _local_rebalance(
     servers: list[_WorkingServer],
     template: VMTemplate,
     assignment_map: dict[str, str],
+    use_node_priority: bool = False,
 ) -> _LocalRebalanceResult | None:
     for max_moves in range(1, LOCAL_REBALANCE_MAX_MOVES + 1):
         result = _search_local_rebalance(
@@ -878,6 +1039,7 @@ def _local_rebalance(
             assignment_map=dict(assignment_map),
             remaining_moves=max_moves,
             moved_template_ids=set(),
+            use_node_priority=use_node_priority,
         )
         if result is not None:
             return result
@@ -891,8 +1053,9 @@ def _search_local_rebalance(
     assignment_map: dict[str, str],
     remaining_moves: int,
     moved_template_ids: set[str],
+    use_node_priority: bool = False,
 ) -> _LocalRebalanceResult | None:
-    choice = _choose_server(servers, template)
+    choice = _choose_server(servers, template, use_node_priority=use_node_priority)
     if choice is not None:
         _apply_template(choice, template)
         assignment_map[template.id] = choice.name
@@ -905,13 +1068,15 @@ def _search_local_rebalance(
         for placed_vm in _ordered_move_candidates(source):
             if placed_vm.template_id in moved_template_ids:
                 continue
-            for target in _ordered_move_targets(servers, source, placed_vm.template):
+            for target in _ordered_move_targets(servers, source, placed_vm.template, use_node_priority=use_node_priority):
                 next_servers = _clone_servers(servers)
                 next_assignment_map = dict(assignment_map)
                 next_source = _server_by_name(next_servers, source.name)
                 next_target = _server_by_name(next_servers, target.name)
                 moved_vm = _remove_placed_vm(next_source, placed_vm.template_id)
                 if moved_vm is None:
+                    continue
+                if not _can_fit(next_target, moved_vm.template):
                     continue
                 _apply_existing_vm(next_target, moved_vm)
                 next_assignment_map[moved_vm.template_id] = next_target.name
@@ -921,6 +1086,7 @@ def _search_local_rebalance(
                     assignment_map=next_assignment_map,
                     remaining_moves=remaining_moves - 1,
                     moved_template_ids=moved_template_ids | {moved_vm.template_id},
+                    use_node_priority=use_node_priority,
                 )
                 if result is not None:
                     return result
@@ -934,7 +1100,7 @@ def _snapshot_servers(servers: list[_WorkingServer]) -> list[ServerSnapshot]:
 
 def _snapshot_server(server: _WorkingServer) -> ServerSnapshot:
     vm_counts = Counter(item.template.name for item in server.placed_vms)
-    cpu_remaining = max(_cpu_schedulable_capacity(server.total_cpu) - server.used_cpu, 0.0)
+    cpu_remaining = max(_cpu_schedulable_capacity(server.total_cpu, server.cpu_overcommit_ratio) - server.used_cpu, 0.0)
     memory_remaining = max(
         _memory_schedulable_capacity(server.total_memory) - server.used_memory,
         0.0,
@@ -965,6 +1131,31 @@ def _snapshot_server(server: _WorkingServer) -> ServerSnapshot:
         placement_count=server.placement_count,
         current_loadavg_1=server.current_loadavg_1,
         average_loadavg_1=server.average_loadavg_1,
+        priority=server.priority,
+        storages=[
+            StorageInfo(
+                storage=pool.storage,
+                type=None,
+                total_gb=round(pool.total_gb, 2),
+                used_gb=round(pool.total_gb - pool.avail_gb, 2),
+                avail_gb=round(pool.avail_gb, 2),
+                used_fraction=round(
+                    (pool.total_gb - pool.avail_gb) / pool.total_gb
+                    if pool.total_gb > EPSILON else 0.0,
+                    4,
+                ),
+                can_vm=pool.can_vm,
+                can_lxc=pool.can_lxc,
+                can_iso=pool.can_iso,
+                can_backup=pool.can_backup,
+                is_shared=pool.is_shared,
+                active=pool.active,
+                enabled=pool.enabled,
+                speed_tier=pool.speed_tier,
+                user_priority=pool.user_priority,
+            )
+            for pool in server.storage_pools
+        ],
         placed_vms=[item.template.name for item in server.placed_vms],
         vm_stack=[
             VmStackItem(name=name, count=count)
@@ -975,7 +1166,7 @@ def _snapshot_server(server: _WorkingServer) -> ServerSnapshot:
 
 def _server_shares(server: _WorkingServer) -> ResourceShares:
     return ResourceShares(
-        cpu=round(_share(server.used_cpu, _cpu_schedulable_capacity(server.total_cpu)), 4),
+        cpu=round(_share(server.used_cpu, _cpu_schedulable_capacity(server.total_cpu, server.cpu_overcommit_ratio)), 4),
         memory=round(
             _share(server.used_memory, _memory_schedulable_capacity(server.total_memory)),
             4,
@@ -1004,7 +1195,7 @@ def _average_share(server: _WorkingServer) -> float:
 def _weighted_share_values(server: _WorkingServer) -> list[float]:
     values = [
         _weighted_share(
-            _share(server.used_cpu, _cpu_schedulable_capacity(server.total_cpu)),
+            _share(server.used_cpu, _cpu_schedulable_capacity(server.total_cpu, server.cpu_overcommit_ratio)),
             CPU_SHARE_WEIGHT,
         ),
         _weighted_share(
@@ -1024,12 +1215,102 @@ def _weighted_share(share: float, weight: float) -> float:
     return share * weight
 
 
+def _storage_scope_score(pool: _StorageState, preference: str) -> int:
+    """0 = preferred scope, 1 = fallback — never a hard exclusion."""
+    if preference == "local":
+        return 0 if not pool.is_shared else 1
+    if preference == "shared":
+        return 0 if pool.is_shared else 1
+    return 0  # "any"
+
+
+def _best_storage_for_template(
+    server: _WorkingServer,
+    template: VMTemplate,
+) -> _StorageState | None:
+    """Return the best storage pool for the template using combined scoring.
+
+    Two-phase selection:
+      Phase 1 — Normal (no overcommit): pools where avail_gb >= disk_gb.
+        Sort key (lower = better):
+          1. Exact preferred_storage_name match (instant win)
+          2. Scope mismatch penalty (0 = matches preference, 1 = fallback)
+          3. Speed tier rank: nvme=0, ssd=1, hdd=2, unknown=3
+          4. User priority (1 = most preferred)
+          5. Most available space (negated for ascending sort)
+      Phase 2 — Overcommit: only when no normal pool can fit.
+        Pools where avail_gb + overcommit_avail_gb >= disk_gb.
+        Additional leading sort key: overcommit_placed_count ascending
+        (ensures overcommit load is spread across pools evenly).
+    """
+    is_lxc = template.resource_type == "lxc"
+    preference = template.storage_scope_preference
+    preferred_name = template.preferred_storage_name
+
+    capable = [
+        pool for pool in server.storage_pools
+        if pool.active
+        and pool.enabled
+        and (pool.can_lxc if is_lxc else pool.can_vm)
+    ]
+
+    # Phase 1: normal candidates (no overcommit needed)
+    normal = [p for p in capable if p.avail_gb + EPSILON >= template.disk_gb]
+    if normal:
+        if preferred_name:
+            for p in normal:
+                if p.storage == preferred_name:
+                    return p
+        return min(
+            normal,
+            key=lambda p: (
+                _storage_scope_score(p, preference),
+                _SPEED_RANK.get(p.speed_tier, 3),
+                p.user_priority,
+                p.placed_count,   # within same tier/priority: spread evenly by count
+                -p.avail_gb,
+            ),
+        )
+
+    # Phase 2: overcommit candidates (spread evenly across pools)
+    overcommit = [
+        p for p in capable
+        if p.avail_gb + p.overcommit_avail_gb + EPSILON >= template.disk_gb
+    ]
+    if not overcommit:
+        return None
+    if preferred_name:
+        for p in overcommit:
+            if p.storage == preferred_name:
+                return p
+    return min(
+        overcommit,
+        key=lambda p: (
+            p.overcommit_placed_count,          # spread: fewest overcommit placements first
+            _storage_scope_score(p, preference),
+            _SPEED_RANK.get(p.speed_tier, 3),
+            p.user_priority,
+            -(p.avail_gb + p.overcommit_avail_gb),
+        ),
+    )
+
+
+def _can_fit_cpu_normal(server: _WorkingServer, template: VMTemplate) -> bool:
+    """True if the VM fits within physical (non-overcommit) CPU headroom."""
+    return (server.total_cpu - server.used_cpu) + EPSILON >= template.cpu_cores
+
+
 def _can_fit(server: _WorkingServer, template: VMTemplate) -> bool:
-    if (_cpu_schedulable_capacity(server.total_cpu) - server.used_cpu) + EPSILON < template.cpu_cores:
+    """Full fit check including CPU overcommit capacity."""
+    if (_cpu_schedulable_capacity(server.total_cpu, server.cpu_overcommit_ratio) - server.used_cpu) + EPSILON < template.cpu_cores:
         return False
     if (_memory_schedulable_capacity(server.total_memory) - server.used_memory) + EPSILON < template.memory_gb:
         return False
-    if (server.total_disk - server.used_disk) + EPSILON < template.disk_gb:
+    # Disk: use per-storage-pool check when available (includes overcommit); fall back to aggregate.
+    if server.storage_pools:
+        if _best_storage_for_template(server, template) is None:
+            return False
+    elif (server.total_disk - server.used_disk) + EPSILON < template.disk_gb:
         return False
     if (server.total_gpu - server.used_gpu) + EPSILON < template.gpu_count:
         return False
@@ -1039,18 +1320,23 @@ def _can_fit(server: _WorkingServer, template: VMTemplate) -> bool:
 def _choose_server(
     servers: list[_WorkingServer],
     template: VMTemplate,
+    *,
+    use_node_priority: bool = False,
 ) -> _WorkingServer | None:
-    candidates = [server for server in servers if _can_fit(server, template)]
-    if not candidates:
+    # Phase 1: candidates with physical CPU headroom (no CPU overcommit needed).
+    normal_cpu = [s for s in servers if _can_fit_cpu_normal(s, template) and _can_fit(s, template)]
+    if normal_cpu:
+        return min(
+            normal_cpu,
+            key=lambda s: _placement_sort_key(s, template, migration_cost=0.0, use_node_priority=use_node_priority),
+        )
+    # Phase 2: allow CPU overcommit — only when no normal candidate exists.
+    overcommit_cpu = [s for s in servers if _can_fit(s, template)]
+    if not overcommit_cpu:
         return None
-
     return min(
-        candidates,
-        key=lambda server: _placement_sort_key(
-            server,
-            template,
-            migration_cost=0.0,
-        ),
+        overcommit_cpu,
+        key=lambda s: _placement_sort_key(s, template, migration_cost=0.0, use_node_priority=use_node_priority),
     )
 
 
@@ -1067,7 +1353,7 @@ def _projected_share_values(server: _WorkingServer, template: VMTemplate) -> lis
         _weighted_share(
             _share(
                 server.used_cpu + template.cpu_cores,
-                _cpu_schedulable_capacity(server.total_cpu),
+                _cpu_schedulable_capacity(server.total_cpu, server.cpu_overcommit_ratio),
             ),
             CPU_SHARE_WEIGHT,
         ),
@@ -1083,7 +1369,7 @@ def _projected_share_values(server: _WorkingServer, template: VMTemplate) -> lis
             DISK_SHARE_WEIGHT,
         ),
     ]
-    if server.total_gpu > EPSILON or template.gpu_count > EPSILON:
+    if server.total_gpu > EPSILON:
         values.append(
             _weighted_share(
                 _share(server.used_gpu + template.gpu_count, server.total_gpu),
@@ -1098,17 +1384,33 @@ def _placement_sort_key(
     template: VMTemplate,
     *,
     migration_cost: float,
-) -> tuple[float, float, float, int, str]:
+    use_node_priority: bool = False,
+) -> tuple:
     projected_dominant_share = _projected_dominant_share(server, template)
     projected_average_share = _projected_average_share(server, template)
     projected_cpu_share = _projected_physical_cpu_share(server, template)
     penalty = _resource_penalty(server, template)
     score = projected_dominant_share + penalty + migration_cost
+    if use_node_priority:
+        # Primary: node priority (1 = most preferred).
+        # Secondary: placement_count — within the same priority tier, spread VMs evenly across nodes.
+        # Tertiary: dominant share score — among equally-loaded nodes, prefer lower load.
+        return (
+            server.priority,
+            server.placement_count,
+            score,
+            projected_average_share,
+            projected_cpu_share,
+            server.name,
+        )
+    # Standard mode: placement_count first for even spreading across all nodes,
+    # then dominant share score for load balance among equally-placed nodes.
+    # _can_fit() already prevents overloading, so round-robin is safe.
     return (
+        server.placement_count,
         score,
         projected_average_share,
         projected_cpu_share,
-        server.placement_count,
         server.name,
     )
 
@@ -1196,29 +1498,89 @@ def _projected_disk_share(server: _WorkingServer, template: VMTemplate) -> float
 
 
 def _clone_servers(servers: list[_WorkingServer]) -> list[_WorkingServer]:
-    return [
-        _WorkingServer(
-            name=server.name,
-            total_cpu=server.total_cpu,
-            total_memory=server.total_memory,
-            total_disk=server.total_disk,
-            total_gpu=server.total_gpu,
-            used_cpu=server.used_cpu,
-            used_memory=server.used_memory,
-            used_disk=server.used_disk,
-            used_gpu=server.used_gpu,
-            current_loadavg_1=server.current_loadavg_1,
-            average_loadavg_1=server.average_loadavg_1,
-            placed_vms=[
-                _PlacedVm(
-                    template_id=item.template_id,
-                    template=item.template.model_copy(deep=True),
+    """Deep-clone the server cluster for rebalance search.
+
+    Shared pools (is_shared=True) are identified by Python object identity
+    (id()) so that the same physical pool referenced by multiple servers
+    becomes one cloned object shared by the same multiple cloned servers.
+    """
+    shared_pool_map: dict[str, _StorageState] = {}
+    cloned: list[_WorkingServer] = []
+
+    for server in servers:
+        new_pools: list[_StorageState] = []
+        for pool in server.storage_pools:
+            if pool.is_shared:
+                pool_key = pool.storage
+                if pool_key not in shared_pool_map:
+                    shared_pool_map[pool_key] = _StorageState(
+                        storage=pool.storage,
+                        can_vm=pool.can_vm,
+                        can_lxc=pool.can_lxc,
+                        can_iso=pool.can_iso,
+                        can_backup=pool.can_backup,
+                        is_shared=True,
+                        speed_tier=pool.speed_tier,
+                        user_priority=pool.user_priority,
+                        total_gb=pool.total_gb,
+                        avail_gb=pool.avail_gb,
+                        active=pool.active,
+                        enabled=pool.enabled,
+                        placed_count=pool.placed_count,
+                        overcommit_avail_gb=pool.overcommit_avail_gb,
+                        overcommit_placed_count=pool.overcommit_placed_count,
+                    )
+                new_pools.append(shared_pool_map[pool_key])
+            else:
+                new_pools.append(
+                    _StorageState(
+                        storage=pool.storage,
+                        can_vm=pool.can_vm,
+                        can_lxc=pool.can_lxc,
+                        can_iso=pool.can_iso,
+                        can_backup=pool.can_backup,
+                        is_shared=False,
+                        speed_tier=pool.speed_tier,
+                        user_priority=pool.user_priority,
+                        total_gb=pool.total_gb,
+                        avail_gb=pool.avail_gb,
+                        active=pool.active,
+                        enabled=pool.enabled,
+                        placed_count=pool.placed_count,
+                        overcommit_avail_gb=pool.overcommit_avail_gb,
+                        overcommit_placed_count=pool.overcommit_placed_count,
+                    )
                 )
-                for item in server.placed_vms
-            ],
+        cloned.append(
+            _WorkingServer(
+                name=server.name,
+                total_cpu=server.total_cpu,
+                total_memory=server.total_memory,
+                total_disk=server.total_disk,
+                total_gpu=server.total_gpu,
+                used_cpu=server.used_cpu,
+                used_memory=server.used_memory,
+                used_disk=server.used_disk,
+                used_gpu=server.used_gpu,
+                current_loadavg_1=server.current_loadavg_1,
+                average_loadavg_1=server.average_loadavg_1,
+                priority=server.priority,
+                cpu_overcommit_ratio=server.cpu_overcommit_ratio,
+                storage_pools=new_pools,
+                placed_vms=[
+                    _PlacedVm(
+                        template_id=item.template_id,
+                        template=item.template.model_copy(deep=True),
+                        storage_pool=item.storage_pool,
+                        is_cpu_overcommit=item.is_cpu_overcommit,
+                        is_overcommit=item.is_overcommit,
+                        overcommit_disk_gb=item.overcommit_disk_gb,
+                    )
+                    for item in server.placed_vms
+                ],
+            )
         )
-        for server in servers
-    ]
+    return cloned
 
 
 def _server_by_name(servers: list[_WorkingServer], server_name: str) -> _WorkingServer:
@@ -1257,6 +1619,8 @@ def _ordered_move_targets(
     servers: list[_WorkingServer],
     source_server: _WorkingServer,
     template: VMTemplate,
+    *,
+    use_node_priority: bool = False,
 ) -> list[_WorkingServer]:
     candidates = [
         server
@@ -1269,6 +1633,7 @@ def _ordered_move_targets(
             server,
             template,
             migration_cost=MIGRATION_COST,
+            use_node_priority=use_node_priority,
         ),
     )
 
@@ -1280,8 +1645,24 @@ def _remove_placed_vm(server: _WorkingServer, template_id: str) -> _PlacedVm | N
         server.placed_vms.pop(index)
         server.used_cpu -= placed_vm.template.cpu_cores
         server.used_memory -= placed_vm.template.memory_gb
-        server.used_disk -= placed_vm.template.disk_gb
         server.used_gpu -= placed_vm.template.gpu_count
+        if placed_vm.storage_pool:
+            for pool in server.storage_pools:
+                if pool.storage == placed_vm.storage_pool:
+                    if placed_vm.is_overcommit:
+                        # Restore: put overcommit portion back to overcommit bucket, normal portion to avail_gb.
+                        from_normal = placed_vm.template.disk_gb - placed_vm.overcommit_disk_gb
+                        pool.avail_gb += from_normal
+                        pool.overcommit_avail_gb += placed_vm.overcommit_disk_gb
+                        pool.overcommit_placed_count = max(pool.overcommit_placed_count - 1, 0)
+                    else:
+                        pool.avail_gb += placed_vm.template.disk_gb
+                        pool.placed_count = max(pool.placed_count - 1, 0)
+                    if not pool.is_shared:
+                        server.used_disk -= placed_vm.template.disk_gb
+                    break
+        else:
+            server.used_disk -= placed_vm.template.disk_gb
         return placed_vm
     return None
 
@@ -1289,20 +1670,61 @@ def _remove_placed_vm(server: _WorkingServer, template_id: str) -> _PlacedVm | N
 def _apply_existing_vm(server: _WorkingServer, placed_vm: _PlacedVm) -> None:
     server.used_cpu += placed_vm.template.cpu_cores
     server.used_memory += placed_vm.template.memory_gb
-    server.used_disk += placed_vm.template.disk_gb
     server.used_gpu += placed_vm.template.gpu_count
+    if placed_vm.storage_pool:
+        for pool in server.storage_pools:
+            if pool.storage == placed_vm.storage_pool:
+                if placed_vm.is_overcommit:
+                    from_normal = placed_vm.template.disk_gb - placed_vm.overcommit_disk_gb
+                    pool.avail_gb -= from_normal
+                    pool.overcommit_avail_gb -= placed_vm.overcommit_disk_gb
+                    pool.overcommit_placed_count += 1
+                else:
+                    pool.avail_gb -= placed_vm.template.disk_gb
+                    pool.placed_count += 1
+                if not pool.is_shared:
+                    server.used_disk += placed_vm.template.disk_gb
+                break
+    else:
+        server.used_disk += placed_vm.template.disk_gb
     server.placed_vms.append(placed_vm)
 
 
 def _apply_template(server: _WorkingServer, template: VMTemplate) -> None:
+    # Detect CPU overcommit BEFORE updating used_cpu.
+    is_cpu_overcommit = (server.used_cpu + template.cpu_cores) > server.total_cpu + EPSILON
     server.used_cpu += template.cpu_cores
     server.used_memory += template.memory_gb
-    server.used_disk += template.disk_gb
     server.used_gpu += template.gpu_count
+    pool = _best_storage_for_template(server, template) if server.storage_pools else None
+    is_overcommit = False
+    overcommit_disk_gb = 0.0
+    if pool is not None:
+        if pool.avail_gb + EPSILON < template.disk_gb:
+            # Overcommit placement: drain all remaining normal space first, then overcommit bucket.
+            is_overcommit = True
+            from_normal = max(pool.avail_gb, 0.0)
+            overcommit_disk_gb = template.disk_gb - from_normal
+            pool.avail_gb = 0.0
+            pool.overcommit_avail_gb -= overcommit_disk_gb
+            pool.overcommit_avail_gb = max(pool.overcommit_avail_gb, 0.0)
+            pool.overcommit_placed_count += 1
+        else:
+            pool.avail_gb -= template.disk_gb
+            pool.avail_gb = max(pool.avail_gb, 0.0)
+            pool.placed_count += 1
+        if not pool.is_shared:
+            server.used_disk += template.disk_gb
+    else:
+        server.used_disk += template.disk_gb
     server.placed_vms.append(
         _PlacedVm(
             template_id=template.id,
             template=template.model_copy(deep=True),
+            storage_pool=pool.storage if pool else None,
+            is_cpu_overcommit=is_cpu_overcommit,
+            is_overcommit=is_overcommit,
+            overcommit_disk_gb=overcommit_disk_gb,
         )
     )
 
@@ -1370,6 +1792,9 @@ def _build_summary(
             placed_by_server.get(placement.server_name, 0) + 1
         )
 
+    # NOTE: Uses default CPU_OVERCOMMIT_RATIO for cluster-level share summary.
+    # Per-server ratio from SimulationRequest is used during placement but not
+    # propagated to ServerSnapshot, so cluster shares are approximate.
     cluster_cpu_policy_total = sum(
         _cpu_schedulable_capacity(server.total.cpu_cores) for server in final_servers
     )

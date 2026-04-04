@@ -21,6 +21,7 @@ from app.schemas import (
     HourlyUsagePoint,
     NodeUsageSummary,
     ProxmoxMonthlyAnalyticsResponse,
+    StorageInfo,
 )
 
 
@@ -175,6 +176,10 @@ async def fetch_monthly_analytics() -> ProxmoxMonthlyAnalyticsResponse:
                 )
                 for node in nodes
             }
+            node_storage_tasks = {
+                node: asyncio.create_task(session.get(f"/nodes/{node}/storage"))
+                for node in nodes
+            }
             guest_status_tasks = {
                 _guest_key(resource): asyncio.create_task(
                     session.get(
@@ -196,6 +201,7 @@ async def fetch_monthly_analytics() -> ProxmoxMonthlyAnalyticsResponse:
 
             node_status_map, node_status_errors = await _await_task_map(node_status_tasks)
             node_rrd_map, node_rrd_errors = await _await_task_map(node_rrd_tasks)
+            node_storage_map, _ = await _await_task_map(node_storage_tasks)
             guest_status_map, guest_status_errors = await _await_task_map(guest_status_tasks)
             guest_rrd_map, guest_rrd_errors = await _await_task_map(guest_rrd_tasks)
     except httpx.HTTPError as exc:
@@ -209,6 +215,7 @@ async def fetch_monthly_analytics() -> ProxmoxMonthlyAnalyticsResponse:
         resources_payload=resources,
         node_status_map=node_status_map,
         node_rrd_map=node_rrd_map,
+        node_storage_map=node_storage_map,
         guest_status_map=guest_status_map,
         guest_rrd_map=guest_rrd_map,
         node_error_map=_merge_error_maps(node_status_errors, node_rrd_errors),
@@ -225,6 +232,7 @@ def build_monthly_analytics(
     resources_payload: list[dict[str, Any]],
     node_status_map: dict[str, dict[str, Any]],
     node_rrd_map: dict[str, list[dict[str, Any]]],
+    node_storage_map: dict[str, list[dict[str, Any]]] | None = None,
     guest_status_map: dict[str, dict[str, Any]],
     guest_rrd_map: dict[str, list[dict[str, Any]]],
     node_error_map: dict[str, str] | None = None,
@@ -234,6 +242,7 @@ def build_monthly_analytics(
     month_start, month_end = _month_window(now)
     node_error_map = node_error_map or {}
     guest_error_map = guest_error_map or {}
+    node_storage_map = node_storage_map or {}
     node_payload_map = {
         str(item.get("node") or item.get("name")): item
         for item in nodes_payload
@@ -282,6 +291,7 @@ def build_monthly_analytics(
                 current_loadavg=_normalize_loadavg(status.get("loadavg")),
                 average_loadavg_1=usage.average_loadavg_1,
                 hourly=usage.hourly,
+                storages=_build_storage_info_list(node_storage_map.get(node, [])),
             )
         )
 
@@ -753,6 +763,36 @@ def _bytes_to_gib(value: Any) -> float | None:
     if numeric is None:
         return None
     return numeric / (1024 ** 3)
+
+
+def _build_storage_info_list(raw: list[dict[str, Any]]) -> list[StorageInfo]:
+    """Convert Proxmox /nodes/{node}/storage API response to StorageInfo list."""
+    result = []
+    for s in raw:
+        if not s.get("storage"):
+            continue
+        content = str(s.get("content", ""))
+        total_gib = _bytes_to_gib(s.get("total")) or 0.0
+        used_gib = _bytes_to_gib(s.get("used")) or 0.0
+        avail_gib = _bytes_to_gib(s.get("avail")) or 0.0
+        result.append(
+            StorageInfo(
+                storage=str(s["storage"]),
+                type=str(s["type"]) if s.get("type") else None,
+                total_gb=round(total_gib, 2),
+                used_gb=round(used_gib, 2),
+                avail_gb=round(avail_gib, 2),
+                used_fraction=float(s.get("used_fraction") or 0.0),
+                can_vm="images" in content,
+                can_lxc="rootdir" in content,
+                can_iso="iso" in content,
+                can_backup="backup" in content,
+                is_shared=bool(s.get("shared", 0) == 1),
+                active=bool(s.get("active", 0) == 1),
+                enabled=True,
+            )
+        )
+    return result
 
 
 def _parse_bool(value: Any) -> bool:

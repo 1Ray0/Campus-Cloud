@@ -12,6 +12,11 @@ const state = {
   currentHour: 9,
   currentStep: 0,
   selectedRange: { start: 9, end: 12 },
+  strategy: "dominant_share_min",
+  cpuOvercommitRatio: 2.0,
+  diskOvercommitRatio: 1.0,
+  // storageConfig: { [poolName]: { is_shared, speed_tier, user_priority } }
+  storageConfig: {},
 };
 
 const elements = {
@@ -37,6 +42,14 @@ const elements = {
   stepCaption: document.querySelector("#step-caption"),
   serverBoard: document.querySelector("#server-board"),
   scenarioNote: document.querySelector("#scenario-note"),
+  strategySelect: document.querySelector("#strategy-select"),
+  nodePriorityList: document.querySelector("#node-priority-list"),
+  storageConfigPanel: document.querySelector("#storage-config-panel"),
+  reliefActions: document.querySelector("#relief-actions"),
+  storageScope: document.querySelector("#vm-storage-scope"),
+  preferredStorage: document.querySelector("#vm-preferred-storage"),
+  cpuOvercommitRatio: document.querySelector("#cpu-overcommit-ratio"),
+  diskOvercommitRatio: document.querySelector("#disk-overcommit-ratio"),
 };
 
 elements.form?.addEventListener("submit", (event) => {
@@ -52,6 +65,20 @@ elements.slider?.addEventListener("input", (event) => {
   renderHourPanel();
   renderServerBoard();
 });
+elements.strategySelect?.addEventListener("change", () => {
+  state.strategy = elements.strategySelect.value;
+  if (state.vmList.length > 0) void runSimulation();
+});
+elements.cpuOvercommitRatio?.addEventListener("change", () => {
+  const parsed = parseFloat(elements.cpuOvercommitRatio.value);
+  state.cpuOvercommitRatio = isNaN(parsed) ? 2.0 : Math.max(1.0, Math.min(8.0, parsed));
+  if (state.vmList.length > 0) void runSimulation();
+});
+elements.diskOvercommitRatio?.addEventListener("change", () => {
+  const parsed = parseFloat(elements.diskOvercommitRatio.value);
+  state.diskOvercommitRatio = isNaN(parsed) ? 1.0 : Math.max(1.0, Math.min(5.0, parsed));
+  if (state.vmList.length > 0) void runSimulation();
+});
 
 void init();
 
@@ -59,6 +86,8 @@ async function init() {
   await loadScenario();
   renderScenarioNote();
   renderRangeControls();
+  renderNodePriorityList();
+  renderStorageConfigPanel();
   renderVmList();
   renderDayCalendar();
   renderCalculationTable();
@@ -95,6 +124,59 @@ function applyScenario(payload) {
   state.scenarioNote = payload.note || "";
   state.vmList = [];
   state.result = null;
+  initStorageConfig();
+  renderNodePriorityList();
+  renderStorageConfigPanel();
+}
+
+function initStorageConfig() {
+  // Collect all unique pool names from all nodes.
+  // Only add entries that don't already exist (preserve user edits on reload).
+  for (const server of state.servers) {
+    for (const pool of server.storages || []) {
+      if (!state.storageConfig[pool.storage]) {
+        state.storageConfig[pool.storage] = {
+          is_shared: pool.is_shared ?? false,
+          speed_tier: pool.speed_tier ?? "unknown",
+          user_priority: pool.user_priority ?? 5,
+          enabled: pool.enabled ?? true,
+          // read-only capability flags (from server, not user-editable)
+          _can_vm: pool.can_vm ?? false,
+          _can_lxc: pool.can_lxc ?? false,
+          _can_iso: pool.can_iso ?? false,
+          _can_backup: pool.can_backup ?? false,
+        };
+      }
+    }
+  }
+}
+
+function applyStorageConfigToServers(servers) {
+  // Deep-copy servers and apply storageConfig overrides before sending to API.
+  return servers.map((server) => ({
+    ...server,
+    storages: (server.storages || []).map((pool) => {
+      const cfg = state.storageConfig[pool.storage];
+      if (!cfg) return pool;
+      return {
+        ...pool,
+        is_shared: cfg.is_shared,
+        speed_tier: cfg.speed_tier,
+        user_priority: cfg.user_priority,
+        enabled: cfg.enabled,
+      };
+    }),
+  }));
+}
+
+function storageRoleLabel(cfg) {
+  const roles = [];
+  if (cfg._can_vm) roles.push("VM");
+  if (cfg._can_lxc) roles.push("LXC");
+  if (cfg._can_iso) roles.push("ISO");
+  if (cfg._can_backup) roles.push("Backup");
+  if (!roles.length) roles.push("Other");
+  return roles;
 }
 
 function renderScenarioNote() {
@@ -170,6 +252,9 @@ async function addVmFromForm() {
     return;
   }
 
+  const storageScope = String(elements.storageScope?.value || "any");
+  const preferredStorage = (elements.preferredStorage?.value || "").trim() || null;
+
   state.vmList.push({
     id: `vm-${Date.now()}-${state.vmList.length + 1}`,
     name,
@@ -181,6 +266,8 @@ async function addVmFromForm() {
     count: quantity,
     active_hours: activeHours,
     enabled: true,
+    storage_scope_preference: storageScope,
+    preferred_storage_name: preferredStorage,
   });
 
   if (elements.name) elements.name.value = "";
@@ -189,6 +276,8 @@ async function addVmFromForm() {
   if (elements.ram) elements.ram.value = "4";
   if (elements.disk) elements.disk.value = "40";
   if (elements.quantity) elements.quantity.value = "1";
+  if (elements.storageScope) elements.storageScope.value = "any";
+  if (elements.preferredStorage) elements.preferredStorage.value = "";
 
   state.result = null;
   state.currentStep = 0;
@@ -295,9 +384,12 @@ async function runSimulation() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        servers: state.servers,
+        servers: applyStorageConfigToServers(state.servers),
         vm_templates: state.vmList,
         historical_profiles: state.historicalProfiles,
+        strategy: state.strategy,
+        cpu_overcommit_ratio: state.cpuOvercommitRatio,
+        disk_overcommit_ratio: state.diskOvercommitRatio,
       }),
     });
     const payload = await response.json();
@@ -395,7 +487,7 @@ function renderCalculationTable() {
   if (!calculations.length) {
     elements.calculationTableBody.innerHTML = `
       <tr>
-        <td colspan="10" class="guest-empty">This hour has no active VM reservation.</td>
+        <td colspan="11" class="guest-empty">This hour has no active VM reservation.</td>
       </tr>
     `;
     return;
@@ -404,7 +496,7 @@ function renderCalculationTable() {
   elements.calculationTableBody.innerHTML = calculations
     .map(
       (row) => `
-        <tr>
+        <tr class="${row.placement_status === 'no_fit' ? 'row-no-fit' : ''}">
           <td>${escapeHtml(row.vm_name)}</td>
           <td>${formatCompact(row.requested_cpu_cores)}C / ${formatCompact(row.requested_memory_gb)}G / ${formatCompact(row.requested_disk_gb)}D</td>
           <td>${escapeHtml(row.profile_label || "Fallback")}</td>
@@ -414,7 +506,14 @@ function renderCalculationTable() {
           <td>${formatCompact(row.peak_cpu_cores)}C / ${formatCompact(row.peak_memory_gb)}G</td>
           <td><span class="risk-pill ${peakRiskClass(row.peak_risk)}">${escapeHtml(formatPeakRisk(row.peak_risk))}</span></td>
           <td>${escapeHtml(formatPlacementStatus(row.placement_status))}</td>
-          <td>${escapeHtml(row.placed_server_name || "-")}</td>
+          <td>
+            ${escapeHtml(row.placed_server_name || "-")}
+            ${row.is_cpu_overcommit ? '<span class="role-pill role-oc" title="CPU 超額配置：此 VM 的 CPU 分配超過節點實體核心數">CPU OC</span>' : ""}
+          </td>
+          <td class="storage-cell">
+            ${escapeHtml(row.placed_storage_pool || "-")}
+            ${row.is_disk_overcommit ? '<span class="role-pill role-oc" title="磁碟超額配置：此 VM 使用的磁碟空間超過 storage pool 實際剩餘容量">OC</span>' : ""}
+          </td>
         </tr>
       `,
     )
@@ -434,6 +533,7 @@ function renderHourPanel() {
     if (elements.stepCaption) {
       elements.stepCaption.textContent = "新增 VM 後，系統會依照真實 PVE node 現況與同類型歷史平均重新計算放置結果。";
     }
+    if (elements.reliefActions) elements.reliefActions.innerHTML = "";
     syncSlider();
     return;
   }
@@ -443,7 +543,14 @@ function renderHourPanel() {
   const failed = currentHourResult.summary?.failed_vm_names || [];
 
   if (elements.hourSummary) {
-    elements.hourSummary.textContent = `${currentHourResult.label} · ${requested} 台待放置 · ${placed} 台成功${failed.length ? ` · ${failed.length} 台未放入` : ""}`;
+    const calculations = currentHourResult.calculations || [];
+    const cpuOcCount = calculations.filter(r => r.is_cpu_overcommit).length;
+    const diskOcCount = calculations.filter(r => r.is_disk_overcommit).length;
+    const ocParts = [];
+    if (cpuOcCount > 0) ocParts.push(`${cpuOcCount} CPU OC`);
+    if (diskOcCount > 0) ocParts.push(`${diskOcCount} Disk OC`);
+    const ocText = ocParts.length > 0 ? ` · ${ocParts.join(", ")}` : "";
+    elements.hourSummary.textContent = `${currentHourResult.label} · ${requested} 台待放置 · ${placed} 台成功${failed.length ? ` · ${failed.length} 台未放入` : ""}${ocText}`;
   }
 
   const currentState = currentHourResult.states[state.currentStep] || currentHourResult.states[0];
@@ -459,6 +566,19 @@ function renderHourPanel() {
     elements.stepCaption.textContent = currentState?.latest_placement?.reason
       || currentHourResult.summary?.stop_reason
       || "目前沒有可顯示的放置說明。";
+  }
+
+  if (elements.reliefActions) {
+    const summary = currentHourResult.summary;
+    const parts = [];
+    if (summary?.bottleneck_server && summary?.bottleneck_resource) {
+      parts.push(`<span class="relief-bottleneck">瓶頸：${escapeHtml(summary.bottleneck_server)} (${escapeHtml(summary.bottleneck_resource)})</span>`);
+    }
+    const relief = summary?.relief_actions || [];
+    for (const action of relief) {
+      parts.push(`<div class="relief-item"><strong>${escapeHtml(action.title)}</strong> — ${escapeHtml(action.detail)}</div>`);
+    }
+    elements.reliefActions.innerHTML = parts.length > 0 ? parts.join("") : "";
   }
 
   syncSlider();
@@ -492,10 +612,19 @@ function renderServerBoard() {
 
   elements.serverBoard.innerHTML = (servers || [])
     .map(
-      (server) => `
+      (server) => {
+        const priority = server.priority ?? getServerPriority(server.name);
+        const priorityBadge = priority != null
+          ? `<span class="priority-badge" title="PVE Node Priority">P${priority}</span>`
+          : "";
+        const storageHtml = renderStoragePools(server.storages);
+        return `
         <article class="server-column">
           <div class="stack-frame">
-            <div class="stack-cap">${escapeHtml(server.name)}</div>
+            <div class="stack-cap">
+              ${escapeHtml(server.name)}
+              ${priorityBadge}
+            </div>
             <div class="stack-body">
               ${renderVmStack(server.vm_stack)}
             </div>
@@ -503,11 +632,181 @@ function renderServerBoard() {
           <div class="server-footer">
             <h3>${escapeHtml(server.name)}</h3>
             <p class="server-meta">${escapeHtml(formatServerMeta(server))}</p>
+            ${storageHtml}
           </div>
         </article>
-      `,
+      `;
+      },
     )
     .join("");
+}
+
+function getServerPriority(name) {
+  const server = state.servers.find((s) => s.name === name);
+  return server?.priority ?? null;
+}
+
+function renderStoragePools(storages) {
+  if (!storages || storages.length === 0) return "";
+
+  const makeRow = (pool) => {
+    const pct = pool.total_gb > 0 ? Math.round((pool.avail_gb / pool.total_gb) * 100) : 0;
+    const roles = [
+      pool.can_vm ? "VM" : null,
+      pool.can_lxc ? "LXC" : null,
+      pool.can_iso ? "ISO" : null,
+      pool.can_backup ? "Bak" : null,
+    ].filter(Boolean).join("/") || "—";
+    const scopeLabel = pool.is_shared ? "shared" : "local";
+    const scopeClass = pool.is_shared ? "scope-shared" : "scope-local";
+    const isDisabled = !pool.active || pool.enabled === false;
+    const disabledClass = isDisabled ? " storage-inactive" : "";
+    const disabledLabel = !pool.active ? " [offline]" : pool.enabled === false ? " [停用]" : "";
+    return `<div class="storage-pool${disabledClass}">
+      <span class="storage-name">${escapeHtml(pool.storage)}${escapeHtml(disabledLabel)}</span>
+      <span class="storage-flags">${escapeHtml(roles)}</span>
+      <span class="storage-scope ${scopeClass}">${scopeLabel}</span>
+      <span class="storage-avail">${formatCompact(pool.avail_gb)} GB free (${pct}%)</span>
+    </div>`;
+  };
+
+  // Split: VM/LXC pools (primary) vs ISO/Backup-only pools (secondary)
+  const primary = storages.filter((p) => p.can_vm || p.can_lxc);
+  const secondary = storages.filter((p) => !p.can_vm && !p.can_lxc);
+
+  const primaryRows = primary.map(makeRow).join("");
+  const secondaryHtml = secondary.length
+    ? `<details class="storage-secondary">
+        <summary class="storage-pools-toggle">${secondary.length} 個 ISO/Backup pool</summary>
+        ${secondary.map(makeRow).join("")}
+       </details>`
+    : "";
+
+  return `<div class="storage-pools">${primaryRows}</div>${secondaryHtml}`;
+}
+
+function renderNodePriorityList() {
+  if (!elements.nodePriorityList) return;
+  if (!state.servers.length) {
+    elements.nodePriorityList.innerHTML = "<p class='helper-text'>No nodes loaded.</p>";
+    return;
+  }
+  elements.nodePriorityList.innerHTML = state.servers
+    .map(
+      (server, index) => `
+      <div class="node-priority-row">
+        <span class="node-priority-name">${escapeHtml(server.name)}</span>
+        <input
+          class="node-priority-input"
+          type="number"
+          min="1"
+          max="10"
+          step="1"
+          value="${Number(server.priority ?? 5)}"
+          data-server-index="${index}"
+          aria-label="Priority for ${escapeHtml(server.name)}"
+        />
+      </div>
+    `,
+    )
+    .join("");
+
+  elements.nodePriorityList.querySelectorAll(".node-priority-input").forEach((input) => {
+    input.addEventListener("change", (event) => {
+      const index = Number(event.target.dataset.serverIndex);
+      const value = Math.min(10, Math.max(1, Number(event.target.value) || 5));
+      event.target.value = value;
+      if (state.servers[index]) {
+        state.servers[index].priority = value;
+        if (state.vmList.length > 0) void runSimulation();
+      }
+    });
+  });
+}
+
+function renderStorageConfigPanel() {
+  if (!elements.storageConfigPanel) return;
+
+  const poolNames = Object.keys(state.storageConfig);
+  if (!poolNames.length) {
+    elements.storageConfigPanel.innerHTML = "<p class='helper-text'>No storage pools detected.</p>";
+    return;
+  }
+
+  elements.storageConfigPanel.innerHTML = poolNames
+    .sort()
+    .map((poolName) => {
+      const cfg = state.storageConfig[poolName];
+      const roles = storageRoleLabel(cfg);
+      const isPlaceable = cfg._can_vm || cfg._can_lxc;
+      const disabledClass = cfg.enabled ? "" : " storage-cfg-disabled";
+      const rolePills = roles
+        .map((r) => {
+          const cls = r === "VM" ? "role-vm" : r === "LXC" ? "role-lxc" : r === "ISO" ? "role-iso" : r === "Backup" ? "role-backup" : "role-other";
+          return `<span class="role-pill ${cls}">${r}</span>`;
+        })
+        .join("");
+
+      return `
+      <div class="storage-cfg-row${disabledClass}" data-pool="${escapeHtml(poolName)}">
+        <div class="storage-cfg-header">
+          <span class="storage-cfg-name">${escapeHtml(poolName)}</span>
+          <div class="storage-cfg-roles">${rolePills}</div>
+        </div>
+        <div class="storage-cfg-controls">
+          <label class="storage-cfg-toggle" title="停用此 Storage，不參與 VM/LXC 放置">
+            <input type="checkbox" class="scfg-enabled" ${cfg.enabled ? "checked" : ""} />
+            <span>啟用</span>
+          </label>
+          ${isPlaceable ? `
+          <label class="storage-cfg-toggle" title="Shared storage — 容量只計一次（NFS/Ceph/RBD）">
+            <input type="checkbox" class="scfg-shared" ${cfg.is_shared ? "checked" : ""} ${!cfg.enabled ? "disabled" : ""} />
+            <span>共享</span>
+          </label>
+          <select class="scfg-speed" title="Storage 速度等級" ${!cfg.enabled ? "disabled" : ""}>
+            ${["nvme", "ssd", "hdd", "unknown"].map((t) =>
+              `<option value="${t}" ${cfg.speed_tier === t ? "selected" : ""}>${t.toUpperCase()}</option>`
+            ).join("")}
+          </select>
+          <label class="storage-cfg-priority-label" title="用途優先級 1=最優先">
+            <span>Pri</span>
+            <input type="number" class="scfg-priority" min="1" max="10" step="1" value="${cfg.user_priority}" ${!cfg.enabled ? "disabled" : ""} />
+          </label>
+          ` : `<span class="storage-cfg-note">不參與 VM/LXC 放置</span>`}
+        </div>
+      </div>`;
+    })
+    .join("");
+
+  elements.storageConfigPanel.querySelectorAll(".storage-cfg-row").forEach((row) => {
+    const poolName = row.dataset.pool;
+    const enabledInput = row.querySelector(".scfg-enabled");
+    const sharedInput = row.querySelector(".scfg-shared");
+    const speedSelect = row.querySelector(".scfg-speed");
+    const priorityInput = row.querySelector(".scfg-priority");
+
+    const save = () => {
+      const prev = state.storageConfig[poolName];
+      state.storageConfig[poolName] = {
+        ...prev,
+        enabled: enabledInput ? enabledInput.checked : prev.enabled,
+        is_shared: sharedInput ? sharedInput.checked : prev.is_shared,
+        speed_tier: speedSelect ? speedSelect.value : prev.speed_tier,
+        user_priority: priorityInput
+          ? Math.min(10, Math.max(1, Number(priorityInput.value) || 5))
+          : prev.user_priority,
+      };
+      if (priorityInput) priorityInput.value = state.storageConfig[poolName].user_priority;
+      // Re-render to toggle disabled state visually
+      renderStorageConfigPanel();
+      if (state.vmList.length > 0) void runSimulation();
+    };
+
+    enabledInput?.addEventListener("change", save);
+    sharedInput?.addEventListener("change", save);
+    speedSelect?.addEventListener("change", save);
+    priorityInput?.addEventListener("change", save);
+  });
 }
 
 function buildHistoricalPeakAnalysis({ valuesByHour, primaryPeakHours }) {
@@ -604,11 +903,18 @@ function formatServerMeta(server) {
   const memoryPolicyFree = Math.max(Number(server.remaining?.memory_gb || 0), 0);
   const diskFree = Math.max(Number(server.remaining?.disk_gb || 0), 0);
 
-  return [
+  const lines = [
     `CPU ${formatCompact(cpuPhysicalFree)} physical free / ${formatCompact(cpuPolicyFree)} policy`,
     `RAM ${formatCompact(memoryPhysicalFree)} physical free / ${formatCompact(memoryPolicyFree)} safe`,
     `Disk ${formatCompact(diskFree)} free`,
-  ].join(" | ");
+  ];
+  if (server.dominant_share != null) {
+    lines.push(`DS ${(server.dominant_share * 100).toFixed(1)}%`);
+  }
+  if (server.current_loadavg_1 != null) {
+    lines.push(`Load ${server.current_loadavg_1.toFixed(2)}`);
+  }
+  return lines.join(" | ");
 }
 
 function syncSlider() {
