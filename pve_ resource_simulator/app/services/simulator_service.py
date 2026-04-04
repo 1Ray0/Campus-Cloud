@@ -618,8 +618,10 @@ def _build_servers(
                 local_used += s.used_gb
 
         # If storage list is provided, derive disk from local pools only.
+        # This keeps total/used disk scoped consistently and avoids mixing
+        # node-level totals with local-pool-only usage on shared-only nodes.
         if inp.storages:
-            total_disk = local_total if local_total > 0 else float(inp.disk_gb)
+            total_disk = local_total
             used_disk = local_used
         else:
             total_disk = float(inp.disk_gb)
