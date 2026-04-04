@@ -301,7 +301,8 @@ def check_nodes(session: SessionDep, current_user: AdminUser) -> list[ProxmoxNod
     nodes = proxmox_node_repo.get_all_nodes(session)
     for node in nodes:
         is_online = _tcp_ping(node.host, node.port)
-        proxmox_node_repo.update_node_status(session, node.id, is_online)
+        if node.id is not None:
+            proxmox_node_repo.update_node_status(session, node.id, is_online)
 
     # 重新讀取以取得更新後的 last_checked
     nodes = proxmox_node_repo.get_all_nodes(session)
@@ -437,7 +438,7 @@ def sync_now(
             except Exception as e:
                 logger.warning(f"Failed to fetch storage for node {node.name}: {e}")
 
-        proxmox_storage_repo.upsert_storages(session, storage_dicts)
+        saved_storages = proxmox_storage_repo.upsert_storages(session, storage_dicts)
 
         from app.core.proxmox import invalidate_proxmox_client
         invalidate_proxmox_client()
@@ -445,7 +446,7 @@ def sync_now(
         return SyncNowResult(
             success=True,
             nodes=[_node_to_public(n) for n in saved_nodes],
-            storage_count=len(storage_dicts),
+            storage_count=len(saved_storages),
         )
 
     except Exception as e:
