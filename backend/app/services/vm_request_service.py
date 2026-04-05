@@ -11,7 +11,7 @@ from app.exceptions import (
     PermissionDeniedError,
     ProvisioningError,
 )
-from app.models import VMRequest, VMRequestStatus
+from app.models import UserRole, VMRequest, VMRequestStatus
 from app.schemas import (
     VMRequestCreate,
     VMRequestPublic,
@@ -65,6 +65,9 @@ def _to_public(req: VMRequest, user_override=None) -> VMRequestPublic:
 def create(
     *, session: Session, request_in: VMRequestCreate, user
 ) -> VMRequestPublic:
+    if getattr(user, "role", None) != UserRole.student:
+        raise PermissionDeniedError("Only students can submit VM requests")
+
     if request_in.resource_type not in ("lxc", "vm"):
         raise BadRequestError("resource_type must be 'lxc' or 'vm'")
     if request_in.resource_type == "lxc" and not request_in.ostemplate:
