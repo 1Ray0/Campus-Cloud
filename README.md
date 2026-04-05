@@ -1,233 +1,143 @@
-# Full Stack FastAPI Template
+# Campus Cloud
 
-<a href="https://github.com/fastapi/full-stack-fastapi-template/actions?query=workflow%3A%22Test+Docker+Compose%22" target="_blank"><img src="https://github.com/fastapi/full-stack-fastapi-template/workflows/Test%20Docker%20Compose/badge.svg" alt="Test Docker Compose"></a>
-<a href="https://github.com/fastapi/full-stack-fastapi-template/actions?query=workflow%3A%22Test+Backend%22" target="_blank"><img src="https://github.com/fastapi/full-stack-fastapi-template/workflows/Test%20Backend/badge.svg" alt="Test Backend"></a>
-<a href="https://coverage-badge.samuelcolvin.workers.dev/redirect/fastapi/full-stack-fastapi-template" target="_blank"><img src="https://coverage-badge.samuelcolvin.workers.dev/fastapi/full-stack-fastapi-template.svg" alt="Coverage"></a>
+Campus Cloud is a full-stack platform for requesting, approving, placing, and operating scheduled VM/LXC resources on a Proxmox cluster.
 
-## Technology Stack and Features
+## What This Project Does
 
-- ⚡ [**FastAPI**](https://fastapi.tiangolo.com) for the Python backend API.
-  - 🧰 [SQLModel](https://sqlmodel.tiangolo.com) for the Python SQL database interactions (ORM).
-  - 🔍 [Pydantic](https://docs.pydantic.dev), used by FastAPI, for the data validation and settings management.
-  - 💾 [PostgreSQL](https://www.postgresql.org) as the SQL database.
-- 🚀 [React](https://react.dev) for the frontend.
-  - 💃 Using TypeScript, hooks, [Vite](https://vitejs.dev), and other parts of a modern frontend stack.
-  - 🎨 [Tailwind CSS](https://tailwindcss.com) and [shadcn/ui](https://ui.shadcn.com) for the frontend components.
-  - 🤖 An automatically generated frontend client.
-  - 🧪 [Playwright](https://playwright.dev) for End-to-End testing.
-  - 🦇 Dark mode support.
-- 🐋 [Docker Compose](https://www.docker.com) for development and production.
-- 🔒 Secure password hashing by default.
-- 🔑 JWT (JSON Web Token) authentication.
-- 📫 Email based password recovery.
-- 📬 [Mailcatcher](https://mailcatcher.me) for local email testing during development.
-- ✅ Tests with [Pytest](https://pytest.org).
-- 📞 [Traefik](https://traefik.io) as a reverse proxy / load balancer.
-- 🚢 Deployment instructions using Docker Compose, including how to set up a frontend Traefik proxy to handle automatic HTTPS certificates.
-- 🏭 CI (continuous integration) and CD (continuous deployment) based on GitHub Actions.
+- Students submit VM or LXC requests with a required usage window.
+- The system only accepts request windows that still have schedulable capacity.
+- Admins review each request with a dedicated time-slot view:
+  - current running resources in the pool
+  - approved requests overlapping the same requested window
+  - projected balanced placement if the current request is approved
+- Approved requests are reserved first.
+- When the requested `start_at` arrives, the scheduler rebalances the active cohort for that time slot.
+- Resources are then created, started, or migrated so the slot runs on the best feasible balanced layout.
+- At `end_at`, the scheduler automatically shuts the resource down.
 
-### Dashboard Login
+## Core Workflow
 
-[![API docs](img/login.png)](https://github.com/fastapi/full-stack-fastapi-template)
+### 1. Request submission
 
-### Dashboard - Admin
+1. The user selects resource type, spec, and a usage window.
+2. The frontend asks the availability API for selectable time slots.
+3. The backend validates the final submitted window again before saving.
+4. The request is stored as `pending`.
 
-[![API docs](img/dashboard.png)](https://github.com/fastapi/full-stack-fastapi-template)
+Relevant files:
 
-### Dashboard - Items
+- [backend/app/services/vm_request_service.py](backend/app/services/vm_request_service.py)
+- [backend/app/services/vm_request_availability_service.py](backend/app/services/vm_request_availability_service.py)
+- [frontend/src/components/Applications/ApplicationRequestPage.tsx](frontend/src/components/Applications/ApplicationRequestPage.tsx)
 
-[![API docs](img/dashboard-items.png)](https://github.com/fastapi/full-stack-fastapi-template)
+### 2. Admin review
 
-### Dashboard - Dark Mode
+1. The admin opens the request review page.
+2. The backend returns a review context for that request window:
+   - current running resources
+   - overlapping approved requests
+   - projected node assignments if this request is approved
+3. When the admin approves, the system rebuilds reservations for all overlapping approved requests and writes the projected node as the request's `desired_node`.
 
-[![API docs](img/dashboard-dark.png)](https://github.com/fastapi/full-stack-fastapi-template)
+Relevant files:
 
-### Interactive API Documentation
+- [backend/app/services/vm_request_service.py](backend/app/services/vm_request_service.py)
+- [backend/app/api/routes/vm_requests.py](backend/app/api/routes/vm_requests.py)
+- [frontend/src/components/Applications/VMRequestReviewPage.tsx](frontend/src/components/Applications/VMRequestReviewPage.tsx)
+- [frontend/src/services/vmRequestReview.ts](frontend/src/services/vmRequestReview.ts)
 
-[![API docs](img/docs.png)](https://github.com/fastapi/full-stack-fastapi-template)
+### 3. Time-slot rebalance at start time
 
-## How To Use It
+When a scheduled window becomes active, the scheduler does not simply start the approved machine where it was originally reserved. Instead it:
 
-You can **just fork or clone** this repository and use it as is.
+1. finds all approved requests active in the current time slot
+2. recomputes a balanced placement for the full active cohort
+3. writes the new `desired_node` values
+4. creates missing resources on the desired node
+5. migrates already-provisioned resources if their `actual_node` differs from `desired_node`
+6. ensures the final resource is running
 
-✨ It just works. ✨
+This design lets the cluster rebalance at the actual start of use, not only at review time.
 
-### How to Use a Private Repository
+Relevant files:
 
-If you want to have a private repository, GitHub won't allow you to simply fork it as it doesn't allow changing the visibility of forks.
+- [backend/app/services/vm_request_schedule_service.py](backend/app/services/vm_request_schedule_service.py)
+- [backend/app/services/vm_request_placement_service.py](backend/app/services/vm_request_placement_service.py)
+- [backend/app/services/provisioning_service.py](backend/app/services/provisioning_service.py)
+- [backend/app/services/proxmox_service.py](backend/app/services/proxmox_service.py)
 
-But you can do the following:
+### 4. Automatic stop
 
-- Create a new GitHub repo, for example `my-full-stack`.
-- Clone this repository manually, set the name with the name of the project you want to use, for example `my-full-stack`:
+When `end_at` is reached, the scheduler triggers a shutdown for the approved resource.
 
-```bash
-git clone git@github.com:fastapi/full-stack-fastapi-template.git my-full-stack
-```
+Relevant file:
 
-- Enter into the new directory:
+- [backend/app/services/vm_request_schedule_service.py](backend/app/services/vm_request_schedule_service.py)
 
-```bash
-cd my-full-stack
-```
+## Placement Model
 
-- Set the new origin to your new repository, copy it from the GitHub interface, for example:
+Each VM request now tracks both planning state and runtime state:
 
-```bash
-git remote set-url origin git@github.com:octocat/my-full-stack.git
-```
+- `assigned_node`: the latest reserved or selected node recorded for the request
+- `desired_node`: where the algorithm wants the request to run for the active slot
+- `actual_node`: where the resource is currently running in Proxmox
+- `migration_status`: whether the runtime is stable, pending migration, migrating, blocked, or failed
+- `rebalance_epoch`: version number of the last active-slot rebalance
+- `last_rebalanced_at`: when the current slot was last rebalanced
 
-- Add this repo as another "remote" to allow you to get updates later:
+Relevant files:
 
-```bash
-git remote add upstream git@github.com:fastapi/full-stack-fastapi-template.git
-```
+- [backend/app/models/vm_request.py](backend/app/models/vm_request.py)
+- [backend/app/alembic/versions/t2u3v4w5x6y7_add_rebalance_fields_to_vm_requests.py](backend/app/alembic/versions/t2u3v4w5x6y7_add_rebalance_fields_to_vm_requests.py)
 
-- Push the code to your new repository:
+## Local Development
 
-```bash
-git push -u origin master
-```
-
-### Update From the Original Template
-
-After cloning the repository, and after doing changes, you might want to get the latest changes from this original template.
-
-- Make sure you added the original repository as a remote, you can check it with:
-
-```bash
-git remote -v
-
-origin    git@github.com:octocat/my-full-stack.git (fetch)
-origin    git@github.com:octocat/my-full-stack.git (push)
-upstream    git@github.com:fastapi/full-stack-fastapi-template.git (fetch)
-upstream    git@github.com:fastapi/full-stack-fastapi-template.git (push)
-```
-
-- Pull the latest changes without merging:
+### Backend
 
 ```bash
-git pull --no-commit upstream master
+cd backend
+uv sync
 ```
 
-This will download the latest changes from this template without committing them, that way you can check everything is right before committing.
-
-- If there are conflicts, solve them in your editor.
-
-- Once you are done, commit the changes:
+### Frontend
 
 ```bash
-git merge --continue
+cd frontend
+npm install
+npm run dev
 ```
 
-### Configure
+### Full stack with Docker Compose
 
-You can then update configs in the `.env` files to customize your configurations.
+See [development.md](development.md) and [deployment.md](deployment.md).
 
-Before deploying it, make sure you change at least the values for:
+## Important Notes
 
-- `SECRET_KEY`
-- `FIRST_SUPERUSER_PASSWORD`
-- `POSTGRES_PASSWORD`
-
-You can (and should) pass these as environment variables from secrets.
-
-Read the [deployment.md](./deployment.md) docs for more details.
-
-### Generate Secret Keys
-
-Some environment variables in the `.env` file have a default value of `changethis`.
-
-You have to change them with a secret key, to generate secret keys you can run the following command:
+- Run Alembic migrations before using the latest scheduling flow:
 
 ```bash
-python -c "import secrets; print(secrets.token_urlsafe(32))"
+cd backend
+alembic upgrade head
 ```
 
-Copy the content and use that as password / secret key. And run that again to generate another secure key.
+- If backend API schemas change, regenerate or align frontend API usage as needed.
+- The scheduler logic assumes the Campus Cloud Proxmox pool is the source of truth for runtime resources.
 
-## How To Use It - Alternative With Copier
+## Tests Used For This Workflow
 
-This repository also supports generating a new project using [Copier](https://copier.readthedocs.io).
+The VM request workflow is covered in:
 
-It will copy all the files, ask you configuration questions, and update the `.env` files with your answers.
+- [backend/tests/test_backend_workflows.py](backend/tests/test_backend_workflows.py)
 
-### Install Copier
-
-You can install Copier with:
+Useful focused test commands:
 
 ```bash
-pip install copier
+pytest backend/tests/test_backend_workflows.py -k "vm_request or process_due_request_starts"
 ```
 
-Or better, if you have [`pipx`](https://pipx.pypa.io/), you can run it with:
+## Additional Docs
 
-```bash
-pipx install copier
-```
-
-**Note**: If you have `pipx`, installing copier is optional, you could run it directly.
-
-### Generate a Project With Copier
-
-Decide a name for your new project's directory, you will use it below. For example, `my-awesome-project`.
-
-Go to the directory that will be the parent of your project, and run the command with your project's name:
-
-```bash
-copier copy https://github.com/fastapi/full-stack-fastapi-template my-awesome-project --trust
-```
-
-If you have `pipx` and you didn't install `copier`, you can run it directly:
-
-```bash
-pipx run copier copy https://github.com/fastapi/full-stack-fastapi-template my-awesome-project --trust
-```
-
-**Note** the `--trust` option is necessary to be able to execute a [post-creation script](https://github.com/fastapi/full-stack-fastapi-template/blob/master/.copier/update_dotenv.py) that updates your `.env` files.
-
-### Input Variables
-
-Copier will ask you for some data, you might want to have at hand before generating the project.
-
-But don't worry, you can just update any of that in the `.env` files afterwards.
-
-The input variables, with their default values (some auto generated) are:
-
-- `project_name`: (default: `"FastAPI Project"`) The name of the project, shown to API users (in .env).
-- `stack_name`: (default: `"fastapi-project"`) The name of the stack used for Docker Compose labels and project name (no spaces, no periods) (in .env).
-- `secret_key`: (default: `"changethis"`) The secret key for the project, used for security, stored in .env, you can generate one with the method above.
-- `first_superuser`: (default: `"admin@example.com"`) The email of the first superuser (in .env).
-- `first_superuser_password`: (default: `"changethis"`) The password of the first superuser (in .env).
-- `smtp_host`: (default: "") The SMTP server host to send emails, you can set it later in .env.
-- `smtp_user`: (default: "") The SMTP server user to send emails, you can set it later in .env.
-- `smtp_password`: (default: "") The SMTP server password to send emails, you can set it later in .env.
-- `emails_from_email`: (default: `"info@example.com"`) The email account to send emails from, you can set it later in .env.
-- `postgres_password`: (default: `"changethis"`) The password for the PostgreSQL database, stored in .env, you can generate one with the method above.
-- `sentry_dsn`: (default: "") The DSN for Sentry, if you are using it, you can set it later in .env.
-
-## Backend Development
-
-Backend docs: [backend/README.md](./backend/README.md).
-
-## Frontend Development
-
-Frontend docs: [frontend/README.md](./frontend/README.md).
-
-## Deployment
-
-Deployment docs: [deployment.md](./deployment.md).
-
-## Development
-
-General development docs: [development.md](./development.md).
-
-This includes using Docker Compose, custom local domains, `.env` configurations, etc.
-
-## Release Notes
-
-Check the file [release-notes.md](./release-notes.md).
-
-## License
-
-The Full Stack FastAPI Template is licensed under the terms of the MIT license.
+- [backend/README.md](backend/README.md)
+- [frontend/README.md](frontend/README.md)
+- [development.md](development.md)
+- [deployment.md](deployment.md)

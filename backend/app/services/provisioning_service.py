@@ -116,7 +116,10 @@ def _select_request_placement(
     placement_request,
     placement_strategy: str,
 ):
-    if getattr(db_request, "assigned_node", None):
+    pinned_node = getattr(db_request, "desired_node", None) or getattr(
+        db_request, "assigned_node", None
+    )
+    if pinned_node:
         nodes, resources = advisor_service._load_cluster_state()
         cpu_overcommit_ratio, disk_overcommit_ratio = (
             vm_request_placement_service.get_overcommit_ratios(session)
@@ -128,13 +131,13 @@ def _select_request_placement(
             disk_overcommit_ratio=disk_overcommit_ratio,
         )
         node_capacities = [
-            item for item in node_capacities if item.node == str(db_request.assigned_node)
+            item for item in node_capacities if item.node == str(pinned_node)
         ]
         effective_resource_type, resource_type_reason = advisor_service._decide_resource_type(
             placement_request
         )
         placement = vm_request_placement_service.CurrentPlacementSelection(
-            node=str(db_request.assigned_node),
+            node=str(pinned_node),
             strategy=placement_strategy,
             plan=vm_request_placement_service.build_plan(
                 session=session,
@@ -166,7 +169,7 @@ def _select_request_placement(
             if fallback.node and fallback.plan.feasible:
                 logger.warning(
                     "Reserved node %s is no longer feasible for request %s; falling back to %s",
-                    getattr(db_request, "assigned_node", None),
+                    pinned_node,
                     getattr(db_request, "id", "unknown"),
                     fallback.node,
                 )

@@ -10,6 +10,7 @@ from app.schemas import (
     VMRequestAvailabilityResponse,
     VMRequestCreate,
     VMRequestPublic,
+    VMRequestReviewContext,
     VMRequestReview,
     VMRequestsPublic,
 )
@@ -75,6 +76,19 @@ def get_vm_request(
 ):
     return vm_request_service.get(
         session=session, request_id=request_id, current_user=current_user
+    )
+
+
+@router.get("/{request_id}/review-context", response_model=VMRequestReviewContext)
+def get_vm_request_review_context(
+    request_id: uuid.UUID,
+    session: SessionDep,
+    current_user: AdminUser,
+):
+    return vm_request_service.get_review_context(
+        session=session,
+        request_id=request_id,
+        current_user=current_user,
     )
 
 

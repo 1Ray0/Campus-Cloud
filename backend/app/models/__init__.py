@@ -14,7 +14,7 @@ from .ai_api_usage import AIAPIUsage
 from .base import get_datetime_utc
 from .resource import Resource
 from .user import User, UserBase, UserRole
-from .vm_request import VMRequest, VMRequestStatus
+from .vm_request import VMMigrationStatus, VMRequest, VMRequestStatus
 from .audit_log import AuditAction, AuditLog
 from .spec_change_request import (
     SpecChangeRequest,
@@ -45,6 +45,7 @@ __all__ = [
     # Resource
     "Resource",
     # VM Request
+    "VMMigrationStatus",
     "VMRequest",
     "VMRequestStatus",
     # Audit Log

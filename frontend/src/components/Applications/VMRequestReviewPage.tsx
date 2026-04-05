@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
+import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
 import { ArrowLeft, Check, X } from "lucide-react"
 import { useMemo, useState } from "react"
@@ -12,179 +12,61 @@ import { Textarea } from "@/components/ui/textarea"
 import useCustomToast from "@/hooks/useCustomToast"
 import { cn } from "@/lib/utils"
 import {
-  type VmRequestAvailabilityNodeSnapshot,
-  type VmRequestAvailabilityResponse,
-  type VmRequestAvailabilitySlot,
-  VmRequestAvailabilityService,
-} from "@/services/vmRequestAvailability"
+  type VmRequestReviewOverlapItem,
+  type VmRequestReviewRuntimeResource,
+  VmRequestReviewService,
+} from "@/services/vmRequestReview"
 import { handleError } from "@/utils"
 
-function formatScheduledRange(startAt?: string | null, endAt?: string | null) {
-  if (!startAt || !endAt) return "未設定時段"
-
-  const formatter = new Intl.DateTimeFormat("zh-TW", {
+function formatDateTime(value?: string | null) {
+  if (!value) return "未排程"
+  return new Intl.DateTimeFormat("zh-TW", {
+    month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
-    month: "2-digit",
     timeZone: "Asia/Taipei",
-  })
-
-  return `${formatter.format(new Date(startAt))} - ${formatter.format(new Date(endAt))}`
+  }).format(new Date(value))
 }
 
-function formatPercent(value: number) {
-  return `${(value * 100).toFixed(1)}%`
+function formatDateRange(startAt?: string | null, endAt?: string | null) {
+  if (!startAt || !endAt) return "未排程"
+  return `${formatDateTime(startAt)} - ${formatDateTime(endAt)}`
 }
 
-function getSelectedSlots(
-  data: VmRequestAvailabilityResponse | undefined,
-  startAt?: string | null,
-  endAt?: string | null,
-) {
-  if (!data || !startAt || !endAt) return []
-
-  const startMs = new Date(startAt).getTime()
-  const endMs = new Date(endAt).getTime()
-
-  return data.days
-    .flatMap((day) => day.slots)
-    .filter((slot) => {
-      const slotStart = new Date(slot.start_at).getTime()
-      return slotStart >= startMs && slotStart < endMs
-    })
-}
-
-function summarizeSelectedSlots(selectedSlots: VmRequestAvailabilitySlot[]) {
-  const feasible =
-    selectedSlots.length > 0 &&
-    selectedSlots.every(
-      (slot) => slot.status === "available" || slot.status === "limited",
-    )
-
-  const nodes = Array.from(
-    selectedSlots.reduce((acc, slot) => {
-      for (const node of slot.recommended_nodes) {
-        acc.set(node, (acc.get(node) ?? 0) + 1)
-      }
-      return acc
-    }, new Map<string, number>()),
-  )
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([node]) => node)
-
-  const reasons = Array.from(
-    new Set(selectedSlots.flatMap((slot) => slot.reasons)),
-  ).slice(0, 4)
-
-  const snapshots = new Map<string, VmRequestAvailabilityNodeSnapshot>()
-  for (const slot of selectedSlots) {
-    for (const snapshot of slot.node_snapshots ?? []) {
-      const current = snapshots.get(snapshot.node)
-      if (
-        !current ||
-        (!current.is_target && snapshot.is_target) ||
-        (current.is_target === snapshot.is_target &&
-          snapshot.dominant_share > current.dominant_share)
-      ) {
-        snapshots.set(snapshot.node, snapshot)
-      }
-    }
-  }
-
-  return {
-    feasible,
-    nodes,
-    reasons,
-    nodeSnapshots: Array.from(snapshots.values()).sort(
-      (a, b) =>
-        Number(b.is_target) - Number(a.is_target) ||
-        a.priority - b.priority ||
-        a.dominant_share - b.dominant_share ||
-        a.node.localeCompare(b.node),
-    ),
-    strategy: selectedSlots[0]?.placement_strategy ?? null,
-  }
-}
-
-function summarizeSlotStatus(selectedSlots: VmRequestAvailabilitySlot[]) {
-  const counts = selectedSlots.reduce(
-    (acc, slot) => {
-      acc[slot.status] += 1
-      return acc
-    },
-    {
-      available: 0,
-      limited: 0,
-      unavailable: 0,
-      policy_blocked: 0,
-    },
-  )
-
-  const blockedReasons = Array.from(
-    new Set(
-      selectedSlots
-        .filter((slot) => slot.status !== "available" && slot.status !== "limited")
-        .flatMap((slot) => slot.reasons),
-    ),
-  ).slice(0, 4)
-
-  return {
-    counts,
-    blockedReasons,
-    total: selectedSlots.length,
-  }
-}
-
-function formatSlotRange(slot: VmRequestAvailabilitySlot) {
-  const formatter = new Intl.DateTimeFormat("zh-TW", {
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    month: "2-digit",
-    timeZone: "Asia/Taipei",
-  })
-
-  return `${formatter.format(new Date(slot.start_at))} - ${formatter.format(new Date(slot.end_at))}`
-}
-
-function statusMeta(status: string, t: (key: string) => string) {
+function statusMeta(status: string) {
   if (status === "approved") {
-    return { label: t("approvals:filters.approved"), variant: "default" as const }
+    return { label: "已通過", variant: "default" as const }
   }
   if (status === "rejected") {
-    return { label: t("approvals:filters.rejected"), variant: "destructive" as const }
+    return { label: "已拒絕", variant: "destructive" as const }
   }
-  return { label: t("approvals:filters.pending"), variant: "outline" as const }
+  return { label: "待審核", variant: "outline" as const }
 }
 
-function PlacementStateBadge({
-  hasSchedule,
-  loading,
-  error,
-  feasible,
-}: {
-  hasSchedule: boolean
-  loading: boolean
-  error: boolean
-  feasible: boolean
-}) {
-  const variant =
-    !hasSchedule || loading ? "outline" : error ? "destructive" : feasible ? "default" : "destructive"
+function migrationMeta(status: VmRequestReviewOverlapItem["migration_status"]) {
+  if (status === "completed") return { label: "已平衡", variant: "default" as const }
+  if (status === "running") return { label: "搬移中", variant: "secondary" as const }
+  if (status === "failed" || status === "blocked") {
+    return { label: status === "failed" ? "失敗" : "受阻", variant: "destructive" as const }
+  }
+  if (status === "pending") return { label: "待搬移", variant: "secondary" as const }
+  return { label: "穩定", variant: "outline" as const }
+}
 
-  return (
-    <Badge variant={variant}>
-      {!hasSchedule
-        ? "未設定時段"
-        : loading
-          ? "模擬中"
-          : error
-            ? "模擬失敗"
-            : feasible
-              ? "目前可放入"
-              : "目前放不下"}
-    </Badge>
-  )
+function resourceTypeLabel(resourceType: string) {
+  return resourceType === "lxc" ? "LXC 容器" : "VM 虛擬機"
+}
+
+function specLabel(request: {
+  resource_type: string
+  cores: number
+  memory: number
+  disk_size?: number | null
+  rootfs_size?: number | null
+}) {
+  const disk = request.resource_type === "vm" ? request.disk_size : request.rootfs_size
+  return `${request.cores} CPU / ${(request.memory / 1024).toFixed(1)} GB RAM / ${disk ?? 0} GB Disk`
 }
 
 function InfoRow({
@@ -196,145 +78,202 @@ function InfoRow({
 }) {
   return (
     <div className="flex items-start justify-between gap-3 border-b border-border/70 py-2 last:border-b-0">
-      <span className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+      <span className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
         {label}
       </span>
-      <span className="max-w-[76%] text-right text-sm leading-snug">{value}</span>
+      <span className="max-w-[70%] text-right text-sm leading-snug">{value}</span>
     </div>
   )
 }
 
-function formatResourceTypeLabel(resourceType: string) {
-  return resourceType === "lxc" ? "LXC 容器" : "QEMU 虛擬機"
+type StackItem = {
+  name: string
+  count: number
+  kind: "running" | "projected" | "current"
 }
 
-function formatTemplateLabel(request: {
-  resource_type: string
-  ostemplate?: string | null
-  template_id?: number | null
-}) {
-  if (request.resource_type === "lxc") {
-    if (!request.ostemplate) return "未設定"
-    return (
-      request.ostemplate
-        .split("/")
-        .pop()
-        ?.replace(/\.tar\..+$/i, "")
-        .replace(/\.img$/i, "") || request.ostemplate
-    )
+type ReviewContextShape = {
+  cluster_nodes: string[]
+  current_running_resources: VmRequestReviewRuntimeResource[]
+  overlapping_approved_requests: VmRequestReviewOverlapItem[]
+}
+
+function buildPveStacks(context: ReviewContextShape) {
+  const byNode = new Map<string, Map<string, StackItem>>()
+
+  const ensureNode = (node: string) => {
+    if (!byNode.has(node)) byNode.set(node, new Map())
+    return byNode.get(node)!
   }
 
-  if (request.template_id) return `Template #${request.template_id}`
-  return "未設定"
-}
-
-function formatSpecLabel(request: {
-  resource_type: string
-  cores: number
-  memory: number
-  disk_size?: number | null
-  rootfs_size?: number | null
-}) {
-  const base = `${request.cores} Core / ${(request.memory / 1024).toFixed(1)} GB RAM`
-
-  if (request.resource_type === "vm") {
-    return `${base} / ${(request.disk_size ?? 0).toFixed(0)} GB Disk`
+  for (const node of context.cluster_nodes) {
+    ensureNode(node)
   }
 
-  return `${base} / ${(request.rootfs_size ?? 0).toFixed(0)} GB Rootfs`
+  for (const resource of context.current_running_resources) {
+    const node = resource.node || "unknown"
+    const items = ensureNode(node)
+    const resourceKey = `running:${resource.name}`
+    const current = items.get(resourceKey)
+    items.set(resourceKey, {
+      name: resource.name,
+      count: (current?.count ?? 0) + 1,
+      kind: "running",
+    })
+  }
+
+  for (const request of context.overlapping_approved_requests) {
+    const node = request.projected_node
+    if (!node) continue
+    const items = ensureNode(node)
+    const kind = request.is_current_request ? "current" : "projected"
+    const requestKey = `${kind}:${request.hostname}`
+    const current = items.get(requestKey)
+    items.set(requestKey, {
+      name: request.hostname,
+      count: (current?.count ?? 0) + 1,
+      kind,
+    })
+  }
+
+  return Array.from(byNode.entries())
+    .map(([node, items]) => ({
+      node,
+      items: Array.from(items.values()).sort(
+        (a, b) =>
+          (a.kind === "current" ? -1 : a.kind === "projected" ? 0 : 1) -
+            (b.kind === "current" ? -1 : b.kind === "projected" ? 0 : 1) ||
+          a.name.localeCompare(b.name),
+      ),
+    }))
+    .sort((a, b) => a.node.localeCompare(b.node))
 }
 
-function MetricPill({
-  label,
-  value,
-  share,
-}: {
-  label: string
-  value: string
-  share: number
-}) {
+function RuntimeResourceCard({ resource }: { resource: VmRequestReviewRuntimeResource }) {
   return (
-    <div className="rounded-md border border-border/70 bg-background/70 px-2 py-1.5 text-[11px]">
-      <div className="text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
-        {label}
+    <article className="rounded-xl border border-border/70 bg-background/50 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="font-medium">{resource.name}</h3>
+          <p className="text-xs text-muted-foreground">
+            {resource.node} / {resource.resource_type.toUpperCase()} / VMID {resource.vmid}
+          </p>
+        </div>
+        <Badge variant="secondary">{resource.status === "running" ? "執行中" : resource.status}</Badge>
       </div>
-      <div className="mt-0.5 font-medium">{value}</div>
-      <div className="text-muted-foreground">{formatPercent(share)}</div>
-    </div>
+      <div className="mt-3 text-sm text-muted-foreground">
+        {resource.linked_hostname
+          ? `關聯申請：${resource.linked_hostname}`
+          : "目前沒有對應中的啟用申請。"}
+      </div>
+    </article>
   )
 }
 
-function StackServerColumn({
-  snapshot,
+function PveStackColumn({
+  node,
+  items,
 }: {
-  snapshot: VmRequestAvailabilityNodeSnapshot
+  node: string
+  items: StackItem[]
 }) {
   return (
     <article className="grid gap-2.5">
-      <div
-        className={cn(
-          "rounded-b-[18px] border-x-4 border-b-4 border-t-0 border-slate-500/80 px-2.5 pb-0 pt-2.5",
-          snapshot.is_target && "border-teal-500",
-        )}
-      >
+      <div className="rounded-b-[18px] border-x-4 border-b-4 border-t-0 border-slate-500/80 px-2.5 pb-0 pt-2.5">
         <div className="flex items-center gap-1.5 border-b-[3px] border-slate-500/80 pb-1.5 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-          <span>{snapshot.node}</span>
+          <span>{node}</span>
           <span className="rounded bg-accent px-1.5 py-0.5 text-[9px] font-semibold text-accent-foreground">
-            P{snapshot.priority}
+            PVE
           </span>
-          {snapshot.is_target && (
-            <span className="rounded bg-teal-500 px-1.5 py-0.5 text-[9px] font-semibold text-black">
-              目標
-            </span>
-          )}
         </div>
         <div className="flex h-[280px] flex-col-reverse gap-1.5 overflow-y-auto py-2 pr-1">
-          {snapshot.vm_stack.length === 0 ? (
-            <div className="grid min-h-[64px] place-items-end-center text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+          {items.length === 0 ? (
+            <div className="grid min-h-[64px] place-items-center text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
               empty
             </div>
           ) : (
-            snapshot.vm_stack.map((item) => (
+            items.map((item) => (
               <div
-                key={`${snapshot.node}-${item.name}`}
+                key={`${node}-${item.name}`}
                 className={cn(
-                  "flex min-h-[42px] items-center justify-between gap-2 rounded-b-[12px] border-[2px] border-rose-400 bg-background/90 px-2.5 py-1.5 text-xs font-medium",
-                  item.pending &&
-                    "border-teal-500 bg-teal-500/10 text-teal-300",
+                  "flex min-h-[42px] items-center justify-between gap-2 rounded-b-[12px] border-[2px] bg-background/90 px-2.5 py-1.5 text-xs font-medium",
+                  item.kind === "current" && "border-teal-500 bg-teal-500/10 text-teal-300",
+                  item.kind === "projected" && "border-amber-400 bg-amber-500/10 text-amber-200",
+                  item.kind === "running" && "border-slate-500/70",
                 )}
               >
                 <span className="truncate">{item.name}</span>
-                <span className="shrink-0 text-xs">x{item.count}</span>
+                <div className="shrink-0 text-right text-[10px]">
+                  <div>x{item.count}</div>
+                  <div className="text-muted-foreground">
+                    {item.kind === "current"
+                      ? "本次申請"
+                      : item.kind === "projected"
+                        ? "預計同時段"
+                        : "目前在線"}
+                  </div>
+                </div>
               </div>
             ))
           )}
         </div>
       </div>
-
       <div className="text-center">
-        <h3 className="text-lg font-semibold tracking-tight">{snapshot.node}</h3>
+        <h3 className="text-lg font-semibold tracking-tight">{node}</h3>
         <p className="mt-0.5 text-[11px] text-muted-foreground">
-          {snapshot.status} · DS {formatPercent(snapshot.dominant_share)} ·{" "}
-          {snapshot.candidate ? "可候選" : "非候選"}
+          顯示目前在線資源與核准後該時段的預計堆疊
         </p>
       </div>
+    </article>
+  )
+}
 
-      <div className="grid grid-cols-3 gap-1.5">
-        <MetricPill
-          label="CPU 剩餘"
-          value={snapshot.remaining_cpu_cores.toFixed(2)}
-          share={snapshot.cpu_share}
-        />
-        <MetricPill
-          label="RAM 剩餘"
-          value={`${snapshot.remaining_memory_gb.toFixed(1)} GB`}
-          share={snapshot.memory_share}
-        />
-        <MetricPill
-          label="Disk 剩餘"
-          value={`${snapshot.remaining_disk_gb.toFixed(1)} GB`}
-          share={snapshot.disk_share}
-        />
+function OverlapCard({ item }: { item: VmRequestReviewOverlapItem }) {
+  const status = statusMeta(item.status)
+  const migration = migrationMeta(item.migration_status)
+
+  return (
+    <article
+      className={cn(
+        "rounded-xl border border-border/70 bg-background/50 p-3",
+        item.is_current_request && "border-primary/60 bg-primary/5",
+      )}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-medium">{item.hostname}</h3>
+            {item.is_current_request && <Badge variant="secondary">本次申請</Badge>}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {resourceTypeLabel(item.resource_type)} / {formatDateRange(item.start_at, item.end_at)}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge variant={status.variant}>{status.label}</Badge>
+          <Badge variant={migration.variant}>{migration.label}</Badge>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 text-sm md:grid-cols-2 xl:grid-cols-4">
+        <div>
+          <div className="text-xs uppercase tracking-[0.14em] text-muted-foreground">目前位置</div>
+          <div>{item.actual_node ?? item.assigned_node ?? "尚未建立"}</div>
+        </div>
+        <div>
+          <div className="text-xs uppercase tracking-[0.14em] text-muted-foreground">期望位置</div>
+          <div>{item.desired_node ?? "等待重排"}</div>
+        </div>
+        <div>
+          <div className="text-xs uppercase tracking-[0.14em] text-muted-foreground">預測位置</div>
+          <div>{item.projected_node ?? "無法分配"}</div>
+        </div>
+        <div>
+          <div className="text-xs uppercase tracking-[0.14em] text-muted-foreground">執行狀態</div>
+          <div>
+            {item.is_provisioned ? `VMID ${item.vmid}` : "尚未建立"}
+            {item.is_running_now ? " / 執行中" : ""}
+          </div>
+        </div>
       </div>
     </article>
   )
@@ -347,46 +286,26 @@ export function VMRequestReviewPage({ requestId }: { requestId: string }) {
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const [comment, setComment] = useState("")
 
-  const requestQuery = useSuspenseQuery({
-    queryKey: ["vm-request", requestId],
-    queryFn: () => VmRequestsService.getVmRequest({ requestId }),
+  const reviewContextQuery = useSuspenseQuery({
+    queryKey: ["vm-request-review-context", requestId],
+    queryFn: () => VmRequestReviewService.getContext({ requestId }),
   })
 
-  const request = requestQuery.data
-  const scheduledStartAt = request.start_at ?? null
-  const scheduledEndAt = request.end_at ?? null
+  const context = reviewContextQuery.data
+  const request = context.request
+  const requestStatus = statusMeta(request.status)
+  const isPending = request.status === "pending"
 
-  const availabilityQuery = useQuery({
-    queryKey: ["vm-request-availability-review", request.id],
-    queryFn: () =>
-      VmRequestAvailabilityService.getByRequestId({
-        requestId: request.id,
-        days: 7,
-        timezone: "Asia/Taipei",
-      }),
-    enabled: Boolean(request.start_at && request.end_at),
-    staleTime: 30_000,
-  })
-
-  const selectedSlots = useMemo(
-    () =>
-      getSelectedSlots(
-        availabilityQuery.data,
-        scheduledStartAt,
-        scheduledEndAt,
-      ),
-    [availabilityQuery.data, scheduledEndAt, scheduledStartAt],
-  )
-
-  const previewSummary = useMemo(
-    () => summarizeSelectedSlots(selectedSlots),
-    [selectedSlots],
-  )
-
-  const slotSummary = useMemo(
-    () => summarizeSlotStatus(selectedSlots),
-    [selectedSlots],
-  )
+  const overlapSummary = useMemo(() => {
+    const approved = context.overlapping_approved_requests.filter(
+      (item) => !item.is_current_request,
+    ).length
+    const provisioned = context.overlapping_approved_requests.filter(
+      (item) => item.is_provisioned,
+    ).length
+    return { approved, provisioned }
+  }, [context.overlapping_approved_requests])
+  const pveStacks = useMemo(() => buildPveStacks(context), [context])
 
   const reviewMutation = useMutation({
     mutationFn: (status: "approved" | "rejected") =>
@@ -405,14 +324,11 @@ export function VMRequestReviewPage({ requestId }: { requestId: string }) {
       )
       queryClient.invalidateQueries({ queryKey: ["vm-requests-admin"] })
       queryClient.invalidateQueries({ queryKey: ["vm-request", request.id] })
+      queryClient.invalidateQueries({ queryKey: ["vm-request-review-context", request.id] })
       navigate({ to: "/approvals" })
     },
     onError: handleError.bind(showErrorToast),
   })
-
-  const currentStatus = statusMeta(request.status, t)
-  const hasSchedule = Boolean(scheduledStartAt && scheduledEndAt)
-  const isPending = request.status === "pending"
 
   return (
     <div className="space-y-5">
@@ -428,70 +344,36 @@ export function VMRequestReviewPage({ requestId }: { requestId: string }) {
             <div>
               <h1 className="text-2xl font-bold tracking-tight">{request.hostname}</h1>
               <p className="text-sm text-muted-foreground">
-                先確認申請資訊與放置模擬，再決定是否通過這筆申請。
+                檢視申請時段、目前在線資源，以及這筆申請加入後的平衡分配結果，再決定是否通過。
               </p>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Badge variant={currentStatus.variant}>{currentStatus.label}</Badge>
-            <PlacementStateBadge
-              hasSchedule={hasSchedule}
-              loading={availabilityQuery.isLoading}
-              error={availabilityQuery.isError}
-              feasible={previewSummary.feasible}
-            />
-            {request.assigned_node && <Badge variant="secondary">Node {request.assigned_node}</Badge>}
-            {request.vmid && <Badge variant="outline">VMID {request.vmid}</Badge>}
+            <Badge variant={requestStatus.variant}>{requestStatus.label}</Badge>
+            <Badge variant={context.feasible ? "default" : "destructive"}>
+              {context.feasible ? "可分配" : "無法分配"}
+            </Badge>
+            {context.projected_node && <Badge variant="secondary">預測節點 {context.projected_node}</Badge>}
+            {context.window_active_now && <Badge variant="outline">時段進行中</Badge>}
           </div>
         </div>
       </header>
 
-      <section className="grid gap-5 xl:grid-cols-[400px_minmax(0,1fr)] 2xl:grid-cols-[440px_minmax(0,1fr)]">
+      <section className="grid gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
         <div className="rounded-2xl border border-border/80 bg-card/40 p-4">
-          <h2 className="text-lg font-semibold">申請內容</h2>
+          <h2 className="text-lg font-semibold">申請資訊</h2>
           <div className="mt-3">
-            <InfoRow
-              label="申請者"
-              value={request.user_full_name || request.user_email || "Unknown"}
-            />
-            <InfoRow
-              label="類型"
-              value={formatResourceTypeLabel(request.resource_type)}
-            />
-            <InfoRow
-              label="作業系統 / 模板"
-              value={formatTemplateLabel(request)}
-            />
-            <InfoRow
-              label="作業系統資訊"
-              value={request.os_info?.trim() || "未填寫"}
-            />
-            <InfoRow
-              label="環境類型"
-              value={request.environment_type || "未設定"}
-            />
-            <InfoRow
-              label="規格"
-              value={formatSpecLabel(request)}
-            />
-            <InfoRow
-              label="儲存"
-              value={request.storage || "未設定"}
-            />
-            {request.resource_type === "vm" && (
-              <InfoRow
-                label="使用者名稱"
-                value={request.username || "未填寫"}
-              />
-            )}
-            <InfoRow
-              label="時段"
-              value={formatScheduledRange(scheduledStartAt, scheduledEndAt)}
-            />
-            <InfoRow label="狀態" value={currentStatus.label} />
+            <InfoRow label="申請人" value={request.user_full_name || request.user_email || "未知"} />
+            <InfoRow label="類型" value={resourceTypeLabel(request.resource_type)} />
+            <InfoRow label="規格" value={specLabel(request)} />
+            <InfoRow label="儲存體" value={request.storage || "未設定"} />
+            <InfoRow label="模板" value={request.template_id ? `Template #${request.template_id}` : request.ostemplate || "未設定"} />
+            <InfoRow label="時段" value={formatDateRange(context.window_start, context.window_end)} />
+            <InfoRow label="預測節點" value={context.projected_node || "無法分配"} />
+            <InfoRow label="策略" value={context.placement_strategy || "priority_dominant_share"} />
           </div>
           <div className="mt-4 border-t border-border/70 pt-3 text-sm">
-            <div className="mb-1 text-xs uppercase tracking-[0.18em] text-muted-foreground">
+            <div className="mb-1 text-xs uppercase tracking-[0.16em] text-muted-foreground">
               申請原因
             </div>
             <p>{request.reason}</p>
@@ -499,10 +381,50 @@ export function VMRequestReviewPage({ requestId }: { requestId: string }) {
         </div>
 
         <div className="rounded-2xl border border-border/80 bg-card/40 p-4">
-          <h2 className="text-lg font-semibold">審核動作</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            放置模擬固定依申請者送出的時段計算，並反映目前 PVE 叢集狀態。
-          </p>
+          <h2 className="text-lg font-semibold">審核判斷</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{context.summary}</p>
+
+          {context.warnings.length > 0 && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {context.warnings.map((warning) => (
+                <Badge key={warning} variant="outline">
+                  {warning}
+                </Badge>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div className="rounded-xl border border-border/70 bg-background/50 p-3">
+              <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
+                目前在線
+              </div>
+              <div className="mt-2 text-2xl font-semibold">
+                {context.current_running_resources.length}
+              </div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                目前 Campus Cloud pool 內正在運行的資源數量。
+              </div>
+            </div>
+            <div className="rounded-xl border border-border/70 bg-background/50 p-3">
+              <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
+                同時段已通過
+              </div>
+              <div className="mt-2 text-2xl font-semibold">{overlapSummary.approved}</div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                與這筆申請時段重疊的已通過申請數量。
+              </div>
+            </div>
+            <div className="rounded-xl border border-border/70 bg-background/50 p-3">
+              <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
+                已建立重疊機器
+              </div>
+              <div className="mt-2 text-2xl font-semibold">{overlapSummary.provisioned}</div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                同時段中已經有 VMID 的申請數量。
+              </div>
+            </div>
+          </div>
 
           <div className="mt-4">
             <label htmlFor="review-note" className="text-sm font-medium">
@@ -512,7 +434,7 @@ export function VMRequestReviewPage({ requestId }: { requestId: string }) {
               id="review-note"
               placeholder={t("approvals:review.reviewNotePlaceholder")}
               value={comment}
-              onChange={(e) => setComment(e.target.value)}
+              onChange={(event) => setComment(event.target.value)}
               className="mt-1"
               disabled={!isPending || reviewMutation.isPending}
             />
@@ -525,6 +447,7 @@ export function VMRequestReviewPage({ requestId }: { requestId: string }) {
                   type="button"
                   onClick={() => reviewMutation.mutate("approved")}
                   loading={reviewMutation.isPending}
+                  disabled={!context.feasible}
                 >
                   <Check className="mr-2 h-4 w-4" />
                   {t("approvals:review.confirmApprove")}
@@ -541,7 +464,7 @@ export function VMRequestReviewPage({ requestId }: { requestId: string }) {
               </>
             ) : (
               <div className="rounded-lg border border-dashed px-3 py-3 text-sm text-muted-foreground">
-                這筆申請已完成審核。
+                這筆申請已經審核完成。
               </div>
             )}
           </div>
@@ -551,109 +474,60 @@ export function VMRequestReviewPage({ requestId }: { requestId: string }) {
       <section className="rounded-2xl border border-border/80 bg-card/40 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 pb-3">
           <div>
-            <h2 className="text-lg font-semibold">放置模擬</h2>
+            <h2 className="text-lg font-semibold">PVE Stack 視圖</h2>
             <p className="text-sm text-muted-foreground">
-              顯示這筆申請在目前叢集狀態下，會優先落在哪些節點以及對應的 PVE stack。
+              以節點堆疊顯示目前在線資源，以及這筆申請加入後該時段的預計配置。
             </p>
           </div>
-          <div className="flex flex-wrap gap-3 text-sm text-muted-foreground">
-            <span>
-              策略：{" "}
-              Priority 排程，未設定節點權重時平均分配
-            </span>
-            <span>
-              建議節點：{" "}
-              {previewSummary.nodes.length > 0 ? previewSummary.nodes.join(", ") : "無"}
-            </span>
+        </div>
+        <div className="mt-4 grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
+          {pveStacks.length > 0 ? (
+            pveStacks.map((stack) => (
+              <PveStackColumn key={stack.node} node={stack.node} items={stack.items} />
+            ))
+          ) : (
+            <div className="rounded-lg border border-dashed px-3 py-3 text-sm text-muted-foreground">
+              目前沒有可顯示的節點堆疊資料。
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-border/80 bg-card/40 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 pb-3">
+          <div>
+            <h2 className="text-lg font-semibold">目前在線資源</h2>
+            <p className="text-sm text-muted-foreground">
+              審核當下叢集內正在執行的資源，這一區只看現在，不代表該申請時段的最終落點。
+            </p>
           </div>
         </div>
-
-        {!availabilityQuery.isLoading && !availabilityQuery.isError && (
-          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-xl border border-border/70 bg-background/60 p-3">
-              <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                時段總數
-              </div>
-              <div className="mt-2 text-2xl font-semibold">{slotSummary.total}</div>
-              <div className="mt-1 text-sm text-muted-foreground">
-                已納入這筆申請的整段時窗模擬
-              </div>
-            </div>
-            <div className="rounded-xl border border-border/70 bg-background/60 p-3">
-              <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                可放入
-              </div>
-              <div className="mt-2 text-2xl font-semibold text-emerald-500">
-                {slotSummary.counts.available + slotSummary.counts.limited}
-              </div>
-              <div className="mt-1 text-sm text-muted-foreground">
-                這些時段會保留可正常開機
-              </div>
-            </div>
-            <div className="rounded-xl border border-border/70 bg-background/60 p-3">
-              <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                被占用 / 不可用
-              </div>
-              <div className="mt-2 text-2xl font-semibold text-rose-500">
-                {slotSummary.counts.unavailable + slotSummary.counts.policy_blocked}
-              </div>
-              <div className="mt-1 text-sm text-muted-foreground">
-                這些時段會被排除或顯示為不可選
-              </div>
-            </div>
-            <div className="rounded-xl border border-border/70 bg-background/60 p-3">
-              <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                最終節點
-              </div>
-              <div className="mt-2 text-2xl font-semibold">
-                {previewSummary.nodes[0] ?? request.assigned_node ?? "未定"}
-              </div>
-              <div className="mt-1 text-sm text-muted-foreground">
-                依目前模擬結果保留的主要落點
-              </div>
-            </div>
-          </div>
-        )}
-
-        {!availabilityQuery.isLoading &&
-          !availabilityQuery.isError &&
-          slotSummary.blockedReasons.length > 0 && (
-            <div className="mt-4 rounded-xl border border-dashed border-border/70 bg-background/40 p-3">
-              <div className="text-sm font-medium">時段衝突原因</div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {slotSummary.blockedReasons.map((reason) => (
-                  <Badge key={reason} variant="outline" className="max-w-full">
-                    {reason}
-                  </Badge>
-                ))}
-              </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+          {context.current_running_resources.length > 0 ? (
+            context.current_running_resources.map((resource) => (
+              <RuntimeResourceCard key={`${resource.node}-${resource.vmid}`} resource={resource} />
+            ))
+          ) : (
+            <div className="rounded-lg border border-dashed px-3 py-3 text-sm text-muted-foreground">
+              Campus Cloud pool 目前沒有在線資源。
             </div>
           )}
+        </div>
+      </section>
 
-        {availabilityQuery.isError && (
-          <div className="mt-4 rounded-lg border border-dashed px-3 py-3 text-sm text-muted-foreground">
-            目前無法載入這筆申請的放置模擬結果。
+      <section className="rounded-2xl border border-border/80 bg-card/40 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 pb-3">
+          <div>
+            <h2 className="text-lg font-semibold">同時段核准後預測</h2>
+            <p className="text-sm text-muted-foreground">
+              顯示與這筆申請時段重疊的已通過申請，以及這筆申請加入後的預測節點與搬移結果。
+            </p>
           </div>
-        )}
-
-        {!availabilityQuery.isLoading &&
-          !availabilityQuery.isError &&
-          previewSummary.reasons.length > 0 && (
-            <div className="mt-4 flex flex-wrap gap-2">
-              {previewSummary.reasons.map((reason) => (
-                <Badge key={reason} variant="outline" className="max-w-full">
-                  {reason}
-                </Badge>
-              ))}
-            </div>
-          )}
-
-        <div className="mt-5 grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
-          {!availabilityQuery.isLoading &&
-            !availabilityQuery.isError &&
-            previewSummary.nodeSnapshots.map((snapshot) => (
-              <StackServerColumn key={snapshot.node} snapshot={snapshot} />
-            ))}
+        </div>
+        <div className="mt-4 space-y-3">
+          {context.overlapping_approved_requests.map((item) => (
+            <OverlapCard key={item.request_id} item={item} />
+          ))}
         </div>
       </section>
     </div>

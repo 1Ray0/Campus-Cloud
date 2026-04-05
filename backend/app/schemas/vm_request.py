@@ -1,4 +1,4 @@
-"""虛擬機申請 schemas"""
+"""VM request schemas."""
 
 import unicodedata
 import uuid
@@ -8,11 +8,10 @@ from typing import Annotated, Literal
 from pydantic import AfterValidator, BaseModel, Field
 
 from app.models.user import UserRole
-from app.models.vm_request import VMRequestStatus
+from app.models.vm_request import VMMigrationStatus, VMRequestStatus
 
 
 def _validate_unicode_hostname(v: str) -> str:
-    """Validate hostname while allowing Unicode letters and digits."""
     if not v:
         raise ValueError("Hostname cannot be empty")
     if v.startswith("-") or v.endswith("-"):
@@ -32,8 +31,6 @@ UnicodeHostname = Annotated[str, AfterValidator(_validate_unicode_hostname)]
 
 
 class VMRequestCreate(BaseModel):
-    """提交虛擬機申請"""
-
     reason: str = Field(min_length=10)
     resource_type: str
     hostname: UnicodeHostname = Field(min_length=1, max_length=63)
@@ -41,7 +38,7 @@ class VMRequestCreate(BaseModel):
     memory: int = 2048
     password: str = Field(min_length=8, max_length=128)
     storage: str = "local-lvm"
-    environment_type: str = "一般環境"
+    environment_type: str = "Custom"
     os_info: str | None = None
     expiry_date: date | None = None
     start_at: datetime
@@ -56,15 +53,11 @@ class VMRequestCreate(BaseModel):
 
 
 class VMRequestReview(BaseModel):
-    """審核虛擬機申請"""
-
     status: VMRequestStatus
     review_comment: str | None = None
 
 
 class VMRequestPublic(BaseModel):
-    """公開的虛擬機申請資訊"""
-
     id: uuid.UUID
     user_id: uuid.UUID
     user_email: str | None = None
@@ -94,15 +87,77 @@ class VMRequestPublic(BaseModel):
     reviewed_at: datetime | None = None
     vmid: int | None = None
     assigned_node: str | None = None
+    desired_node: str | None = None
+    actual_node: str | None = None
     placement_strategy_used: str | None = None
+    migration_status: VMMigrationStatus = VMMigrationStatus.idle
+    migration_error: str | None = None
+    rebalance_epoch: int = 0
+    last_rebalanced_at: datetime | None = None
     created_at: datetime
 
 
 class VMRequestsPublic(BaseModel):
-    """虛擬機申請列表"""
-
     data: list[VMRequestPublic]
     count: int
+
+
+class VMRequestReviewRuntimeResource(BaseModel):
+    vmid: int
+    name: str
+    node: str
+    resource_type: str
+    status: str
+    linked_request_id: uuid.UUID | None = None
+    linked_hostname: str | None = None
+    linked_actual_node: str | None = None
+    linked_desired_node: str | None = None
+
+
+class VMRequestReviewOverlapItem(BaseModel):
+    request_id: uuid.UUID
+    hostname: str
+    resource_type: str
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    vmid: int | None = None
+    status: VMRequestStatus
+    assigned_node: str | None = None
+    desired_node: str | None = None
+    actual_node: str | None = None
+    projected_node: str | None = None
+    projected_strategy: str | None = None
+    migration_status: VMMigrationStatus = VMMigrationStatus.idle
+    is_current_request: bool = False
+    is_running_now: bool = False
+    is_provisioned: bool = False
+
+
+class VMRequestReviewProjectedNode(BaseModel):
+    node: str
+    request_count: int = Field(default=0, ge=0)
+    includes_current_request: bool = False
+    hostnames: list[str] = Field(default_factory=list)
+
+
+class VMRequestReviewContext(BaseModel):
+    request: VMRequestPublic
+    window_start: datetime
+    window_end: datetime
+    window_active_now: bool = False
+    feasible: bool = False
+    placement_strategy: str | None = None
+    projected_node: str | None = None
+    summary: str
+    warnings: list[str] = Field(default_factory=list)
+    cluster_nodes: list[str] = Field(default_factory=list)
+    current_running_resources: list[VMRequestReviewRuntimeResource] = Field(
+        default_factory=list
+    )
+    overlapping_approved_requests: list[VMRequestReviewOverlapItem] = Field(
+        default_factory=list
+    )
+    projected_nodes: list[VMRequestReviewProjectedNode] = Field(default_factory=list)
 
 
 class VMRequestAvailabilityRequest(BaseModel):

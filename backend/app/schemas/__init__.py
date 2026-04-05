@@ -76,6 +76,10 @@ from .vm_request import (
     VMRequestCreate,
     VMRequestPlacementPreview,
     VMRequestPublic,
+    VMRequestReviewContext,
+    VMRequestReviewOverlapItem,
+    VMRequestReviewProjectedNode,
+    VMRequestReviewRuntimeResource,
     VMRequestReview,
     VMRequestsPublic,
 )
@@ -172,6 +176,10 @@ __all__ = [
     "VMRequestPlacementPreview",
     "VMRequestReview",
     "VMRequestPublic",
+    "VMRequestReviewContext",
+    "VMRequestReviewOverlapItem",
+    "VMRequestReviewProjectedNode",
+    "VMRequestReviewRuntimeResource",
     "VMRequestsPublic",
     # Audit Log
     "AuditLogPublic",

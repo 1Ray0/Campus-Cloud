@@ -58,6 +58,73 @@ def _request_capacity_tuple(db_request: VMRequest) -> tuple[float, int, int]:
     return cpu_cores, memory_bytes, disk_gb * GIB
 
 
+def _refresh_node_candidate(node: NodeCapacity) -> None:
+    node.guest_pressure_ratio = advisor_service._guest_pressure_ratio(
+        int(node.running_resources),
+        int(node.total_cpu_cores),
+    )
+    node.guest_overloaded = (
+        node.guest_pressure_ratio >= advisor_service.settings.guest_pressure_threshold
+    )
+    node.candidate = (
+        node.status == "online"
+        and node.allocatable_cpu_cores > 0
+        and node.allocatable_memory_bytes > 0
+        and node.allocatable_disk_bytes > 0
+        and not node.guest_overloaded
+    )
+
+
+def _release_request_from_capacities(
+    *,
+    node_capacities: list[NodeCapacity],
+    db_request: VMRequest,
+    node_name: str | None,
+) -> None:
+    if not node_name:
+        return
+    node = next((item for item in node_capacities if item.node == node_name), None)
+    if node is None:
+        return
+
+    cpu_cores, memory_bytes, disk_bytes = _request_capacity_tuple(db_request)
+    node.allocatable_cpu_cores = min(
+        round(node.allocatable_cpu_cores + cpu_cores, 2),
+        round(float(node.total_cpu_cores), 2),
+    )
+    node.allocatable_memory_bytes = min(
+        node.allocatable_memory_bytes + memory_bytes,
+        int(node.total_memory_bytes),
+    )
+    node.allocatable_disk_bytes = min(
+        node.allocatable_disk_bytes + disk_bytes,
+        int(node.total_disk_bytes),
+    )
+    node.running_resources = max(int(node.running_resources) - 1, 0)
+    _refresh_node_candidate(node)
+
+
+def _reserve_request_on_capacities(
+    *,
+    node_capacities: list[NodeCapacity],
+    db_request: VMRequest,
+    node_name: str,
+) -> None:
+    node = next((item for item in node_capacities if item.node == node_name), None)
+    if node is None:
+        raise ValueError(f"Target node {node_name} not found in capacity list")
+
+    cpu_cores, memory_bytes, disk_bytes = _request_capacity_tuple(db_request)
+    node.allocatable_cpu_cores = max(
+        round(node.allocatable_cpu_cores - cpu_cores, 2),
+        0.0,
+    )
+    node.allocatable_memory_bytes = max(node.allocatable_memory_bytes - memory_bytes, 0)
+    node.allocatable_disk_bytes = max(node.allocatable_disk_bytes - disk_bytes, 0)
+    node.running_resources = int(node.running_resources) + 1
+    _refresh_node_candidate(node)
+
+
 def _hour_window_iter(start_at: datetime, end_at: datetime) -> list[datetime]:
     if end_at <= start_at:
         return [start_at]
@@ -435,6 +502,70 @@ def rebuild_reserved_assignments(
         request.placement_strategy_used = selection.strategy
         selections[request.id] = selection
         reserved_so_far.append(request)
+
+    return selections
+
+
+def rebalance_active_assignments(
+    *,
+    session: Session,
+    requests: list[VMRequest],
+) -> dict[uuid.UUID, CurrentPlacementSelection]:
+    ordered_requests = sorted(
+        requests,
+        key=lambda item: (
+            _normalize_datetime(item.start_at) or datetime.min.replace(tzinfo=UTC),
+            _normalize_datetime(item.reviewed_at) or datetime.min.replace(tzinfo=UTC),
+            _normalize_datetime(item.created_at) or datetime.min.replace(tzinfo=UTC),
+            str(item.id),
+        ),
+    )
+    nodes, resources = advisor_service._load_cluster_state()
+    cpu_overcommit_ratio, disk_overcommit_ratio = get_overcommit_ratios(session)
+    working_nodes = advisor_service._build_node_capacities(
+        nodes=nodes,
+        resources=resources,
+        cpu_overcommit_ratio=cpu_overcommit_ratio,
+        disk_overcommit_ratio=disk_overcommit_ratio,
+    )
+    strategy = get_placement_strategy(session)
+    priorities = get_node_priorities(session)
+
+    for request in ordered_requests:
+        if request.vmid is not None:
+            _release_request_from_capacities(
+                node_capacities=working_nodes,
+                db_request=request,
+                node_name=str(request.actual_node or request.assigned_node or ""),
+            )
+
+    selections: dict[uuid.UUID, CurrentPlacementSelection] = {}
+    for request in ordered_requests:
+        placement_request = _to_placement_request(request)
+        effective_resource_type, resource_type_reason = advisor_service._decide_resource_type(
+            placement_request
+        )
+        plan = build_plan(
+            session=session,
+            request=placement_request,
+            node_capacities=working_nodes,
+            effective_resource_type=effective_resource_type,
+            resource_type_reason=resource_type_reason,
+            placement_strategy=strategy,
+            node_priorities=priorities,
+        )
+        if not plan.feasible or not plan.recommended_node:
+            raise ValueError(f"No feasible active rebalance exists for request {request.id}")
+        _reserve_request_on_capacities(
+            node_capacities=working_nodes,
+            db_request=request,
+            node_name=plan.recommended_node,
+        )
+        selections[request.id] = CurrentPlacementSelection(
+            node=plan.recommended_node,
+            strategy=strategy,
+            plan=plan,
+        )
 
     return selections
 

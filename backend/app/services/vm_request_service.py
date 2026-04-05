@@ -11,16 +11,21 @@ from app.exceptions import (
     PermissionDeniedError,
     ProvisioningError,
 )
-from app.models import UserRole, VMRequest, VMRequestStatus
+from app.models import UserRole, VMMigrationStatus, VMRequest, VMRequestStatus
 from app.schemas import (
     VMRequestCreate,
     VMRequestPublic,
+    VMRequestReviewContext,
+    VMRequestReviewOverlapItem,
+    VMRequestReviewProjectedNode,
+    VMRequestReviewRuntimeResource,
     VMRequestReview,
     VMRequestsPublic,
 )
 from app.repositories import vm_request as vm_request_repo
 from app.services import (
     audit_service,
+    proxmox_service,
     vm_request_availability_service,
     vm_request_placement_service,
 )
@@ -61,7 +66,13 @@ def _to_public(req: VMRequest, user_override=None) -> VMRequestPublic:
         reviewed_at=req.reviewed_at,
         vmid=req.vmid,
         assigned_node=req.assigned_node,
+        desired_node=req.desired_node,
+        actual_node=req.actual_node,
         placement_strategy_used=req.placement_strategy_used,
+        migration_status=req.migration_status,
+        migration_error=req.migration_error,
+        rebalance_epoch=req.rebalance_epoch,
+        last_rebalanced_at=req.last_rebalanced_at,
         created_at=req.created_at,
     )
 
@@ -152,6 +163,174 @@ def get(
     return _to_public(db_request)
 
 
+def get_review_context(
+    *,
+    session: Session,
+    request_id: uuid.UUID,
+    current_user,
+) -> VMRequestReviewContext:
+    db_request = vm_request_repo.get_vm_request_by_id(
+        session=session,
+        request_id=request_id,
+    )
+    if not db_request:
+        raise NotFoundError("Request not found")
+
+    is_admin = bool(
+        getattr(current_user, "is_superuser", False)
+        or getattr(current_user, "role", None) == UserRole.admin
+    )
+    if not is_admin:
+        raise PermissionDeniedError("Not enough privileges")
+
+    start_at = db_request.start_at
+    end_at = db_request.end_at
+    if not start_at or not end_at:
+        raise BadRequestError("A scheduled request window is required for review context")
+    if start_at.tzinfo is None:
+        start_at = start_at.replace(tzinfo=UTC)
+    if end_at.tzinfo is None:
+        end_at = end_at.replace(tzinfo=UTC)
+
+    overlapping_requests = [
+        item
+        for item in vm_request_repo.get_approved_vm_requests_overlapping_window(
+            session=session,
+            window_start=start_at,
+            window_end=end_at,
+        )
+        if item.id != db_request.id
+    ]
+
+    projection_request = VMRequest.model_validate(db_request.model_dump())
+    projection_request.status = VMRequestStatus.approved
+    projection_request.assigned_node = None
+    projection_request.desired_node = None
+    projection_request.placement_strategy_used = None
+    projection_request.reviewed_at = projection_request.reviewed_at or _utc_now()
+    projected_requests = overlapping_requests + [projection_request]
+    selections = vm_request_placement_service.rebuild_reserved_assignments(
+        session=session,
+        requests=projected_requests,
+    )
+    request_selection = selections.get(projection_request.id)
+    if not request_selection or not request_selection.node:
+        raise BadRequestError("No projected node is available for this request window")
+
+    now = _utc_now()
+    active_requests = vm_request_repo.list_active_approved_vm_requests(
+        session=session,
+        at_time=now,
+    )
+    active_by_vmid = {
+        int(item.vmid): item
+        for item in active_requests
+        if item.vmid is not None
+    }
+
+    current_running_resources: list[VMRequestReviewRuntimeResource] = []
+    cluster_nodes = sorted(
+        {
+            str(item.get("node") or item.get("name") or "").strip()
+            for item in proxmox_service.list_nodes()
+            if str(item.get("node") or item.get("name") or "").strip()
+        }
+    )
+    for resource in proxmox_service.list_all_resources():
+        status = str(resource.get("status") or "").lower()
+        if status != "running":
+            continue
+        vmid = int(resource.get("vmid"))
+        linked_request = active_by_vmid.get(vmid)
+        current_running_resources.append(
+            VMRequestReviewRuntimeResource(
+                vmid=vmid,
+                name=str(resource.get("name") or f"vm-{vmid}"),
+                node=str(resource.get("node") or "unknown"),
+                resource_type=str(resource.get("type") or "unknown"),
+                status=status,
+                linked_request_id=linked_request.id if linked_request else None,
+                linked_hostname=linked_request.hostname if linked_request else None,
+                linked_actual_node=linked_request.actual_node if linked_request else None,
+                linked_desired_node=linked_request.desired_node if linked_request else None,
+            )
+        )
+    current_running_resources.sort(
+        key=lambda item: (item.node, item.name, item.vmid)
+    )
+
+    running_vmids = {item.vmid for item in current_running_resources}
+    overlap_items: list[VMRequestReviewOverlapItem] = []
+    projected_by_node: dict[str, list[str]] = {}
+    for request in projected_requests:
+        selection = selections.get(request.id)
+        projected_node = selection.node if selection else None
+        if projected_node:
+            projected_by_node.setdefault(projected_node, []).append(request.hostname)
+        overlap_items.append(
+            VMRequestReviewOverlapItem(
+                request_id=request.id,
+                hostname=request.hostname,
+                resource_type=request.resource_type,
+                start_at=request.start_at,
+                end_at=request.end_at,
+                vmid=request.vmid,
+                status=db_request.status if request.id == db_request.id else request.status,
+                assigned_node=request.assigned_node,
+                desired_node=request.desired_node,
+                actual_node=request.actual_node,
+                projected_node=projected_node,
+                projected_strategy=selection.strategy if selection else None,
+                migration_status=request.migration_status,
+                is_current_request=request.id == db_request.id,
+                is_running_now=bool(request.vmid is not None and request.vmid in running_vmids),
+                is_provisioned=request.vmid is not None,
+            )
+        )
+    overlap_items.sort(
+        key=lambda item: (
+            not item.is_current_request,
+            item.start_at or datetime.min.replace(tzinfo=UTC),
+            item.hostname,
+        )
+    )
+
+    projected_nodes = [
+        VMRequestReviewProjectedNode(
+            node=node,
+            request_count=len(hostnames),
+            includes_current_request=db_request.hostname in hostnames,
+            hostnames=sorted(hostnames),
+        )
+        for node, hostnames in sorted(
+            projected_by_node.items(),
+            key=lambda item: (-len(item[1]), item[0]),
+        )
+    ]
+
+    return VMRequestReviewContext(
+        request=_to_public(db_request),
+        window_start=start_at,
+        window_end=end_at,
+        window_active_now=start_at <= now < end_at,
+        feasible=bool(request_selection.plan.feasible),
+        placement_strategy=request_selection.strategy,
+        projected_node=request_selection.node,
+        summary=request_selection.plan.summary,
+        warnings=list(request_selection.plan.warnings or []),
+        cluster_nodes=sorted(
+            {
+                *cluster_nodes,
+                *(item.node for item in current_running_resources),
+                *(item.node for item in projected_nodes),
+            }
+        ),
+        current_running_resources=current_running_resources,
+        overlapping_approved_requests=overlap_items,
+        projected_nodes=projected_nodes,
+    )
+
+
 def review(
     *,
     session: Session,
@@ -198,7 +377,11 @@ def review(
             reviewer_id=reviewer.id,
             review_comment=review_data.review_comment,
             assigned_node=None,
+            desired_node=None,
+            actual_node=None,
             placement_strategy_used=None,
+            migration_status=VMMigrationStatus.idle,
+            migration_error=None,
             commit=False,
         )
 
@@ -225,7 +408,17 @@ def review(
                     db_request=request,
                     vmid=request.vmid,
                     assigned_node=selection.node,
+                    desired_node=selection.node,
+                    actual_node=request.actual_node,
                     placement_strategy_used=selection.strategy,
+                    migration_status=(
+                        VMMigrationStatus.pending
+                        if request.vmid is not None
+                        and request.actual_node
+                        and request.actual_node != selection.node
+                        else VMMigrationStatus.idle
+                    ),
+                    migration_error=None,
                     commit=False,
                 )
             reservation = selections[updated.id]
