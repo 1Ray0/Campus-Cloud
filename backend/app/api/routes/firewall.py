@@ -42,6 +42,11 @@ def get_topology(session: SessionDep, current_user: CurrentUser):
     """取得當前使用者有權限的 VM 防火牆拓撲（節點 + 連線）"""
     try:
         return firewall_service.get_topology(user=current_user, session=session)
+    except (NotFoundError, BadRequestError) as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ProxmoxError as e:
+        logger.error(f"Proxmox error in get_topology: {e}")
+        raise HTTPException(status_code=502, detail="Proxmox 服務不可用")
     except Exception:
         logger.exception("取得拓撲失敗")
         raise HTTPException(status_code=500, detail="取得拓撲失敗")
@@ -365,8 +370,12 @@ def delete_nat_rule(
     try:
         nat_service.remove_nat_rule_by_id(session=session, rule_id=rule_id)
         return Message(message="NAT 規則已刪除")
+    except ProxmoxError as e:
+        logger.error(f"Proxmox error removing NAT rule {rule_id}: {e}")
+        raise HTTPException(status_code=502, detail="Proxmox 操作失敗")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Failed to remove NAT rule {rule_id}")
+        raise HTTPException(status_code=500, detail="刪除 NAT 規則失敗")
 
 
 @router.post("/nat-rules/sync", response_model=Message)
@@ -380,8 +389,12 @@ def sync_nat_rules(
     try:
         nat_service.sync_to_gateway(session=session)
         return Message(message="NAT 規則已同步到 Gateway VM")
+    except ProxmoxError as e:
+        logger.error(f"Proxmox error syncing NAT rules: {e}")
+        raise HTTPException(status_code=502, detail="Proxmox 操作失敗")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to sync NAT rules")
+        raise HTTPException(status_code=500, detail="同步 NAT 規則失敗")
 
 
 # ─── 反向代理規則管理 ─────────────────────────────────────────────────────────
@@ -446,8 +459,12 @@ def delete_reverse_proxy_rule(
     try:
         reverse_proxy_service.remove_reverse_proxy_rule_by_id(session=session, rule_id=rule_id)
         return Message(message="反向代理規則已刪除")
+    except ProxmoxError as e:
+        logger.error(f"Proxmox error removing reverse proxy rule {rule_id}: {e}")
+        raise HTTPException(status_code=502, detail="Proxmox 操作失敗")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Failed to remove reverse proxy rule {rule_id}")
+        raise HTTPException(status_code=500, detail="刪除反向代理規則失敗")
 
 
 @router.post("/reverse-proxy-rules/sync", response_model=Message)
@@ -461,8 +478,12 @@ def sync_reverse_proxy_rules(
     try:
         reverse_proxy_service.sync_to_gateway(session=session)
         return Message(message="反向代理規則已同步到 Gateway VM")
+    except ProxmoxError as e:
+        logger.error(f"Proxmox error syncing reverse proxy rules: {e}")
+        raise HTTPException(status_code=502, detail="Proxmox 操作失敗")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to sync reverse proxy rules")
+        raise HTTPException(status_code=500, detail="同步反向代理規則失敗")
 
 
 @router.get("/{vmid}/options", response_model=FirewallOptionsPublic)
