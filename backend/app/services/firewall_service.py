@@ -27,7 +27,6 @@ from app.schemas.firewall import (
 )
 from app.services import proxmox_service
 from app.services.proxmox_service import ResourceType
-from app.services.resource_service import _from_punycode_hostname
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +39,20 @@ _CC_PREFIX = "campus-cloud:"
 _GATEWAY_COMMENT = f"{_CC_PREFIX}gateway:default"
 _BLOCK_LOCAL_COMMENT = f"{_CC_PREFIX}block-local-subnet"
 _INTERNET_INBOUND_PREFIX = f"{_CC_PREFIX}gateway->"
+
+
+def _from_punycode_hostname(hostname: str) -> str:
+    result_labels = []
+    for label in hostname.split("."):
+        if label.lower().startswith("xn--"):
+            try:
+                decoded = label[4:].encode("ascii").decode("punycode")
+                result_labels.append(decoded)
+            except Exception:
+                result_labels.append(label)
+        else:
+            result_labels.append(label)
+    return ".".join(result_labels)
 
 
 # ─── Proxmox 防火牆 API 封裝 ─────────────────────────────────────────────────

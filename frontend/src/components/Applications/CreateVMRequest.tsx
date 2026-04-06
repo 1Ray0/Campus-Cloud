@@ -3,9 +3,15 @@ import { Plus } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
 import { Button } from "@/components/ui/button"
+import useAuth from "@/hooks/useAuth"
 
 const CreateVMRequest = () => {
   const { t } = useTranslation("applications")
+  const { user } = useAuth()
+
+  if (!user || user.role !== "student") {
+    return null
+  }
 
   return (
     <Button asChild>

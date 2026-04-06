@@ -295,6 +295,33 @@ def delete_resource(
     return task
 
 
+def migrate_resource(
+    source_node: str,
+    target_node: str,
+    vmid: int,
+    resource_type: ResourceType,
+    *,
+    online: bool = True,
+    with_local_disks: bool = True,
+) -> str:
+    if source_node == target_node:
+        raise BadRequestError("Source and target nodes must be different for migration")
+
+    params: dict[str, int | str] = {"target": target_node}
+    if resource_type == "qemu":
+        if online:
+            params["online"] = 1
+        if with_local_disks:
+            params["with-local-disks"] = 1
+    else:
+        if online:
+            params["restart"] = 1
+
+    task = _resource_api(source_node, vmid, resource_type).migrate.post(**params)
+    basic_blocking_task_status(source_node, task)
+    return task
+
+
 # ---------------------------------------------------------------------------
 # IP address
 # ---------------------------------------------------------------------------

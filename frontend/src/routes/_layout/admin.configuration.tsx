@@ -116,6 +116,16 @@ interface ProxmoxConfigPublic {
   placement_strategy: string
   cpu_overcommit_ratio: number
   disk_overcommit_ratio: number
+  migration_enabled: boolean
+  migration_max_per_rebalance: number
+  migration_min_interval_minutes: number
+  migration_retry_limit: number
+  rebalance_migration_cost: number
+  rebalance_peak_cpu_margin: number
+  rebalance_peak_memory_margin: number
+  rebalance_loadavg_warn_per_core: number
+  rebalance_loadavg_max_per_core: number
+  rebalance_loadavg_penalty_weight: number
   updated_at: string | null
   is_configured: boolean
   has_ca_cert: boolean
@@ -139,6 +149,16 @@ interface ProxmoxConfigUpdate {
   placement_strategy: string
   cpu_overcommit_ratio: number
   disk_overcommit_ratio: number
+  migration_enabled: boolean
+  migration_max_per_rebalance: number
+  migration_min_interval_minutes: number
+  migration_retry_limit: number
+  rebalance_migration_cost: number
+  rebalance_peak_cpu_margin: number
+  rebalance_peak_memory_margin: number
+  rebalance_loadavg_warn_per_core: number
+  rebalance_loadavg_max_per_core: number
+  rebalance_loadavg_penalty_weight: number
 }
 
 interface ProxmoxNodePublic {
@@ -341,6 +361,16 @@ interface ConfigFormData {
   placement_strategy: string
   cpu_overcommit_ratio: number
   disk_overcommit_ratio: number
+  migration_enabled: boolean
+  migration_max_per_rebalance: number
+  migration_min_interval_minutes: number
+  migration_retry_limit: number
+  rebalance_migration_cost: number
+  rebalance_peak_cpu_margin: number
+  rebalance_peak_memory_margin: number
+  rebalance_loadavg_warn_per_core: number
+  rebalance_loadavg_max_per_core: number
+  rebalance_loadavg_penalty_weight: number
 }
 
 interface NodeFormData {
@@ -1186,9 +1216,19 @@ function AdminConfigPage() {
       gateway_ip: "",
       local_subnet: "",
       default_node: "",
-      placement_strategy: "dominant_share_min",
+      placement_strategy: "priority_dominant_share",
       cpu_overcommit_ratio: 2.0,
       disk_overcommit_ratio: 1.0,
+      migration_enabled: true,
+      migration_max_per_rebalance: 2,
+      migration_min_interval_minutes: 60,
+      migration_retry_limit: 3,
+      rebalance_migration_cost: 0.15,
+      rebalance_peak_cpu_margin: 1.1,
+      rebalance_peak_memory_margin: 1.05,
+      rebalance_loadavg_warn_per_core: 0.8,
+      rebalance_loadavg_max_per_core: 1.5,
+      rebalance_loadavg_penalty_weight: 0.9,
     },
   })
 
@@ -1207,9 +1247,24 @@ function AdminConfigPage() {
         gateway_ip: config.gateway_ip ?? "",
         local_subnet: config.local_subnet ?? "",
         default_node: config.default_node ?? "",
-        placement_strategy: config.placement_strategy ?? "dominant_share_min",
+        placement_strategy: "priority_dominant_share",
         cpu_overcommit_ratio: config.cpu_overcommit_ratio ?? 2.0,
         disk_overcommit_ratio: config.disk_overcommit_ratio ?? 1.0,
+        migration_enabled: config.migration_enabled ?? true,
+        migration_max_per_rebalance: config.migration_max_per_rebalance ?? 2,
+        migration_min_interval_minutes:
+          config.migration_min_interval_minutes ?? 60,
+        migration_retry_limit: config.migration_retry_limit ?? 3,
+        rebalance_migration_cost: config.rebalance_migration_cost ?? 0.15,
+        rebalance_peak_cpu_margin: config.rebalance_peak_cpu_margin ?? 1.1,
+        rebalance_peak_memory_margin:
+          config.rebalance_peak_memory_margin ?? 1.05,
+        rebalance_loadavg_warn_per_core:
+          config.rebalance_loadavg_warn_per_core ?? 0.8,
+        rebalance_loadavg_max_per_core:
+          config.rebalance_loadavg_max_per_core ?? 1.5,
+        rebalance_loadavg_penalty_weight:
+          config.rebalance_loadavg_penalty_weight ?? 0.9,
       })
     }
   }, [config, form])
@@ -1271,9 +1326,19 @@ function AdminConfigPage() {
       gateway_ip: data.gateway_ip || null,
       local_subnet: data.local_subnet || null,
       default_node: data.default_node || null,
-      placement_strategy: data.placement_strategy,
+      placement_strategy: "priority_dominant_share",
       cpu_overcommit_ratio: data.cpu_overcommit_ratio,
       disk_overcommit_ratio: data.disk_overcommit_ratio,
+      migration_enabled: data.migration_enabled,
+      migration_max_per_rebalance: data.migration_max_per_rebalance,
+      migration_min_interval_minutes: data.migration_min_interval_minutes,
+      migration_retry_limit: data.migration_retry_limit,
+      rebalance_migration_cost: data.rebalance_migration_cost,
+      rebalance_peak_cpu_margin: data.rebalance_peak_cpu_margin,
+      rebalance_peak_memory_margin: data.rebalance_peak_memory_margin,
+      rebalance_loadavg_warn_per_core: data.rebalance_loadavg_warn_per_core,
+      rebalance_loadavg_max_per_core: data.rebalance_loadavg_max_per_core,
+      rebalance_loadavg_penalty_weight: data.rebalance_loadavg_penalty_weight,
     }
   }
 
@@ -1370,6 +1435,7 @@ function AdminConfigPage() {
   const cpuVal = form.watch("cpu_overcommit_ratio")
   const diskVal = form.watch("disk_overcommit_ratio")
   const strategyVal = form.watch("placement_strategy")
+  const migrationEnabledVal = form.watch("migration_enabled")
 
   const SaveButton = () => (
     <div className="flex justify-end pt-2">
@@ -1979,6 +2045,7 @@ function AdminConfigPage() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-6">
+                    <div className="hidden">
                     {/* Strategy radio cards */}
                     <FormField
                       control={form.control}
@@ -2039,6 +2106,21 @@ function AdminConfigPage() {
                     />
 
                     <Separator />
+                    </div>
+
+                    <div className="rounded-lg border border-border/70 bg-muted/20 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-medium">Priority 排程</p>
+                          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                            系統固定先依節點 Priority 排序；若 Priority 相同，會自動平均分配到同級節點。
+                          </p>
+                        </div>
+                        <Badge variant="secondary" className="shrink-0">
+                          固定啟用
+                        </Badge>
+                      </div>
+                    </div>
 
                     {/* Overcommit sliders */}
                     <div className="grid gap-6 sm:grid-cols-2">
@@ -2106,6 +2188,269 @@ function AdminConfigPage() {
                                 ? "不超額：僅使用實際可用磁碟空間"
                                 : `允許超配至 ${Math.round(diskVal * 100)}%；先塞實際空間，不足才啟用`}
                             </p>
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+
+                    <Separator />
+
+                    <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr_1fr]">
+                      <FormField
+                        control={form.control}
+                        name="migration_enabled"
+                        render={({ field }) => (
+                          <FormItem className="flex items-start justify-between rounded-lg border p-4">
+                            <div className="space-y-1">
+                              <FormLabel>自動搬移</FormLabel>
+                              <FormDescription>
+                                僅在時段開始重排時，自動搬移已存在 VM/LXC 以追求更平衡的分配。
+                              </FormDescription>
+                            </div>
+                            <FormControl>
+                              <Switch
+                                checked={field.value}
+                                onCheckedChange={field.onChange}
+                              />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name="migration_max_per_rebalance"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>每輪最多搬移</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min={0}
+                                max={20}
+                                {...field}
+                                disabled={!migrationEnabledVal}
+                                onChange={(e) =>
+                                  field.onChange(Number(e.target.value))
+                                }
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              0 代表只重排規劃，不執行搬移。
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name="migration_min_interval_minutes"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>最短搬移間隔</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min={0}
+                                max={10080}
+                                {...field}
+                                disabled={!migrationEnabledVal}
+                                onChange={(e) =>
+                                  field.onChange(Number(e.target.value))
+                                }
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              同一台 request 在這段時間內不會被再次搬移。
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+
+                    <div className="grid gap-4 lg:grid-cols-3">
+                      <FormField
+                        control={form.control}
+                        name="migration_retry_limit"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Migration Retry Limit</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min={0}
+                                max={10}
+                                {...field}
+                                disabled={!migrationEnabledVal}
+                                onChange={(e) =>
+                                  field.onChange(Number(e.target.value))
+                                }
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              0 代表失敗後持續留在 queue，等待下一輪再試。
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name="rebalance_migration_cost"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Migration Cost</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min={0}
+                                max={5}
+                                step={0.01}
+                                {...field}
+                                onChange={(e) =>
+                                  field.onChange(Number(e.target.value))
+                                }
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              數值越高，演算法越傾向維持既有 VM 位置，降低重排搬移次數。
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name="rebalance_loadavg_penalty_weight"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Loadavg Penalty Weight</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min={0}
+                                max={5}
+                                step={0.1}
+                                {...field}
+                                onChange={(e) =>
+                                  field.onChange(Number(e.target.value))
+                                }
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              提高後會更積極避開近期負載偏高的節點。
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+
+                    <div className="grid gap-4 lg:grid-cols-4">
+                      <FormField
+                        control={form.control}
+                        name="rebalance_peak_cpu_margin"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Peak CPU Margin</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min={1}
+                                max={2}
+                                step={0.01}
+                                {...field}
+                                onChange={(e) =>
+                                  field.onChange(Number(e.target.value))
+                                }
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              估算尖峰 CPU 風險時套用的保守倍率。
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name="rebalance_peak_memory_margin"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Peak Memory Margin</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min={1}
+                                max={2}
+                                step={0.01}
+                                {...field}
+                                onChange={(e) =>
+                                  field.onChange(Number(e.target.value))
+                                }
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              估算尖峰 RAM 風險時套用的保守倍率。
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name="rebalance_loadavg_warn_per_core"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Loadavg Warn/Core</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min={0}
+                                max={4}
+                                step={0.05}
+                                {...field}
+                                onChange={(e) =>
+                                  field.onChange(Number(e.target.value))
+                                }
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              每核心 loadavg 超過此值後開始降權。
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name="rebalance_loadavg_max_per_core"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Loadavg Max/Core</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min={0.1}
+                                max={8}
+                                step={0.05}
+                                {...field}
+                                onChange={(e) =>
+                                  field.onChange(Number(e.target.value))
+                                }
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              達到此值時 loadavg penalty 視為滿額。
+                            </FormDescription>
+                            <FormMessage />
                           </FormItem>
                         )}
                       />

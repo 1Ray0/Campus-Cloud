@@ -1,9 +1,176 @@
+import { useQuery } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import type { TFunction } from "i18next"
 
 import type { VMRequestPublic } from "@/client"
 import { Badge } from "@/components/ui/badge"
+import {
+  type VmRequestAvailabilityResponse,
+  VmRequestAvailabilityService,
+} from "@/services/vmRequestAvailability"
 import { ReviewActions } from "./ReviewActions"
+
+function formatScheduledRange(startAt?: string | null, endAt?: string | null) {
+  if (!startAt || !endAt) return "未設定"
+
+  const formatter = new Intl.DateTimeFormat("zh-TW", {
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "2-digit",
+    timeZone: "Asia/Taipei",
+  })
+
+  return `${formatter.format(new Date(startAt))} - ${formatter.format(new Date(endAt))}`
+}
+
+function formatTemplateLabel(request: VMRequestPublic) {
+  if (request.resource_type === "lxc") {
+    if (!request.ostemplate) return "未設定"
+    return (
+      request.ostemplate
+        .split("/")
+        .pop()
+        ?.replace(/\.tar\..+$/i, "")
+        .replace(/\.img$/i, "") || request.ostemplate
+    )
+  }
+
+  if (request.template_id) return `Template #${request.template_id}`
+  return "未設定"
+}
+
+function formatSpecLabel(request: VMRequestPublic) {
+  const base = `${request.cores} Core / ${(request.memory / 1024).toFixed(1)} GB RAM`
+
+  if (request.resource_type === "vm") {
+    return `${base} / ${(request.disk_size ?? 0).toFixed(0)} GB Disk`
+  }
+
+  return `${base} / ${(request.rootfs_size ?? 0).toFixed(0)} GB Rootfs`
+}
+
+function getSelectedSlots(
+  data: VmRequestAvailabilityResponse | undefined,
+  startAt?: string | null,
+  endAt?: string | null,
+) {
+  if (!data || !startAt || !endAt) return []
+
+  const startMs = new Date(startAt).getTime()
+  const endMs = new Date(endAt).getTime()
+
+  return data.days
+    .flatMap((day) => day.slots)
+    .filter((slot) => {
+      const slotStart = new Date(slot.start_at).getTime()
+      return slotStart >= startMs && slotStart < endMs
+    })
+}
+
+function PlacementStatusCell({ request }: { request: VMRequestPublic }) {
+  if (request.status === "approved") {
+    return (
+      <div className="flex flex-col gap-1">
+        <Badge variant="default" className="w-fit">
+          已通過
+        </Badge>
+        <span className="text-xs text-muted-foreground">
+          {request.assigned_node ? `節點 ${request.assigned_node}` : "待同步節點"}
+        </span>
+      </div>
+    )
+  }
+
+  if (request.status === "rejected") {
+    return (
+      <Badge variant="outline" className="w-fit">
+        已拒絕
+      </Badge>
+    )
+  }
+
+  if (!request.start_at || !request.end_at) {
+    return (
+      <div className="flex flex-col gap-1">
+        <Badge variant="outline" className="w-fit">
+          未排程
+        </Badge>
+        <span className="text-xs text-muted-foreground">尚未選擇時段</span>
+      </div>
+    )
+  }
+
+  const query = useQuery({
+    queryKey: [
+      "vm-request-availability-row",
+      request.id,
+      request.start_at,
+      request.end_at,
+    ],
+    queryFn: () =>
+      VmRequestAvailabilityService.getByRequestId({
+        requestId: request.id,
+        days: 7,
+        timezone: "Asia/Taipei",
+      }),
+    staleTime: 30_000,
+  })
+
+  if (query.isLoading) {
+    return (
+      <div className="flex flex-col gap-1">
+        <Badge variant="outline" className="w-fit">
+          模擬中
+        </Badge>
+        <span className="text-xs text-muted-foreground">正在檢查容量與節點</span>
+      </div>
+    )
+  }
+
+  if (query.isError) {
+    return (
+      <div className="flex flex-col gap-1">
+        <Badge variant="destructive" className="w-fit">
+          模擬失敗
+        </Badge>
+        <span className="text-xs text-muted-foreground">暫時無法取得狀態</span>
+      </div>
+    )
+  }
+
+  const selectedSlots = getSelectedSlots(
+    query.data,
+    request.start_at,
+    request.end_at,
+  )
+  const feasible =
+    selectedSlots.length > 0 &&
+    selectedSlots.every(
+      (slot) => slot.status === "available" || slot.status === "limited",
+    )
+  const nodes = Array.from(
+    selectedSlots.reduce((acc, slot) => {
+      for (const node of slot.recommended_nodes) {
+        acc.set(node, (acc.get(node) ?? 0) + 1)
+      }
+      return acc
+    }, new Map<string, number>()),
+  )
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([node]) => node)
+
+  return (
+    <div className="flex flex-col gap-1">
+      <Badge variant={feasible ? "default" : "destructive"} className="w-fit">
+        {feasible ? "可放入" : "放不下"}
+      </Badge>
+      <span className="text-xs text-muted-foreground">
+        {nodes.length > 0 ? `節點 ${nodes.join(", ")}` : "尚無可用節點"}
+      </span>
+    </div>
+  )
+}
 
 export const createAdminRequestColumns = (
   t: TFunction<string, string>,
@@ -41,35 +208,78 @@ export const createAdminRequestColumns = (
     ),
   },
   {
+    id: "template",
+    header: "作業系統 / 模板",
+    cell: ({ row }) => (
+      <div className="min-w-[180px] whitespace-normal">
+        <div className="font-medium">{formatTemplateLabel(row.original)}</div>
+        <div className="mt-1 text-xs text-muted-foreground">
+          {row.original.os_info?.trim() || "未填寫作業系統資訊"}
+        </div>
+      </div>
+    ),
+  },
+  {
+    id: "formDetails",
+    header: "表單資訊",
+    cell: ({ row }) => (
+      <div className="min-w-[190px] whitespace-normal text-sm">
+        <div>{row.original.environment_type || "未設定環境類型"}</div>
+        {row.original.resource_type === "vm" ? (
+          <div className="mt-1 text-xs text-muted-foreground">
+            使用者名稱：{row.original.username || "未填寫"}
+          </div>
+        ) : null}
+        <div className="mt-1 text-xs text-muted-foreground">
+          儲存：{row.original.storage || "未設定"}
+        </div>
+      </div>
+    ),
+  },
+  {
     accessorKey: "reason",
     header: t("approvals:review.reason"),
     cell: ({ row }) => (
-      <span className="text-muted-foreground line-clamp-2 max-w-[250px]">
+      <span className="block max-w-[250px] whitespace-normal text-muted-foreground">
         {row.original.reason}
       </span>
     ),
   },
   {
-    accessorKey: "cores",
+    id: "specs",
     header: t("approvals:review.specs"),
     cell: ({ row }) => (
-      <span className="text-sm text-muted-foreground">
-        {row.original.cores} Core / {(row.original.memory / 1024).toFixed(1)} GB
+      <span className="block min-w-[210px] whitespace-normal text-sm text-muted-foreground">
+        {formatSpecLabel(row.original)}
       </span>
     ),
+  },
+  {
+    id: "schedule",
+    header: "申請時段",
+    cell: ({ row }) => (
+      <span className="block min-w-[210px] whitespace-normal text-sm text-muted-foreground">
+        {formatScheduledRange(row.original.start_at, row.original.end_at)}
+      </span>
+    ),
+  },
+  {
+    id: "placementStatus",
+    header: "放置狀態",
+    cell: ({ row }) => <PlacementStatusCell request={row.original} />,
   },
   {
     accessorKey: "created_at",
     header: t("applications:table.applicationTime"),
     cell: ({ row }) => (
-      <span className="text-muted-foreground text-sm">
+      <span className="text-sm text-muted-foreground">
         {new Date(row.original.created_at).toLocaleString("zh-TW")}
       </span>
     ),
   },
   {
     id: "actions",
-    header: t("approvals:review.approve"),
+    header: "審核",
     cell: ({ row }) => <ReviewActions request={row.original} />,
   },
 ]

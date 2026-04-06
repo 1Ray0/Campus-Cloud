@@ -14,12 +14,7 @@ import { useForm, useWatch } from "react-hook-form"
 import { useTranslation } from "react-i18next"
 import { z } from "zod"
 
-import {
-  type ApiError,
-  LxcService,
-  VmRequestsService,
-  VmService,
-} from "@/client"
+import { type ApiError, LxcService, VmRequestsService, VmService } from "@/client"
 import { Button } from "@/components/ui/button"
 import {
   Form,
@@ -41,13 +36,11 @@ import {
 import { Slider } from "@/components/ui/slider"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
-import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 import { AiChatPanel, type AiPlanResult } from "./AiChatPanel"
 import { type FastTemplate, FastTemplatesTab } from "./FastTemplatesTab"
-import type { ScriptDeployFormData } from "./ScriptDeployDialog"
-import { ScriptDeployPage } from "./ScriptDeployDialog"
+import { RequestAvailabilityPanel } from "./RequestAvailabilityPanel"
 
 function normalizeHostname(value: string) {
   return String(value || "")
@@ -57,6 +50,37 @@ function normalizeHostname(value: string) {
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 63)
+}
+
+function formatScheduleSummary(startAt?: string, endAt?: string) {
+  if (!startAt || !endAt) return "尚未選擇時段"
+
+  const formatter = new Intl.DateTimeFormat("zh-TW", {
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "2-digit",
+    timeZone: "Asia/Taipei",
+  })
+
+  return `${formatter.format(new Date(startAt))} - ${formatter.format(new Date(endAt))}`
+}
+
+function SummaryRow({
+  label,
+  value,
+}: {
+  label: string
+  value: string
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 border-b border-border/70 py-2.5 last:border-b-0">
+      <span className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+        {label}
+      </span>
+      <span className="max-w-[72%] text-right text-sm leading-snug">{value}</span>
+    </div>
+  )
 }
 
 type ImportedFormPrefill = NonNullable<
@@ -83,17 +107,11 @@ export function ApplicationRequestPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
-  const { user } = useAuth()
-  const needsApproval = user === undefined ? true : user.role === "student"
+  const showAiAssistant = true
   const [showTemplateSelector, setShowTemplateSelector] = useState(false)
   const [resourceType, setResourceType] = useState<"lxc" | "vm">("lxc")
   const [serviceTemplateName, setServiceTemplateName] = useState("")
   const [serviceTemplateSlug, setServiceTemplateSlug] = useState("")
-  const [selectedFastTemplate, setSelectedFastTemplate] =
-    useState<FastTemplate | null>(null)
-  const [showDeployPage, setShowDeployPage] = useState(false)
-  const [deployFormData, setDeployFormData] =
-    useState<ScriptDeployFormData | null>(null)
   const aiColumnRef = useRef<HTMLElement | null>(null)
   const [desktopPanelFrame, setDesktopPanelFrame] =
     useState<DesktopPanelFrame | null>(null)
@@ -102,14 +120,12 @@ export function ApplicationRequestPage() {
     () =>
       z.object({
         resource_type: z.enum(["lxc", "vm"]),
-        reason: needsApproval
-          ? z
-              .string()
-              .min(1, { message: t("validation:reason.required") })
-              .min(10, {
-                message: t("validation:reason.minLength", { count: 10 }),
-              })
-          : z.string().optional(),
+        reason: z
+          .string()
+          .min(1, { message: t("validation:reason.required") })
+          .min(10, {
+            message: t("validation:reason.minLength", { count: 10 }),
+          }),
         hostname: z
           .string()
           .min(1, { message: t("validation:name.required") })
@@ -132,9 +148,10 @@ export function ApplicationRequestPage() {
           }),
         storage: z.string().default("local-lvm"),
         os_info: z.string().optional(),
-        expiry_date: z.string().optional(),
+        start_at: z.string().min(1),
+        end_at: z.string().min(1),
       }),
-    [t, needsApproval],
+    [t],
   )
 
   type FormData = z.input<typeof formSchema>
@@ -157,7 +174,8 @@ export function ApplicationRequestPage() {
       password: "",
       storage: "local-lvm",
       os_info: "",
-      expiry_date: "",
+      start_at: "",
+      end_at: "",
     },
   })
 
@@ -177,23 +195,69 @@ export function ApplicationRequestPage() {
     name: "template_id",
   })
   const watchedUsername = useWatch({ control: form.control, name: "username" })
+  const watchedCores = useWatch({ control: form.control, name: "cores" })
+  const watchedMemory = useWatch({ control: form.control, name: "memory" })
+  const watchedRootfsSize = useWatch({
+    control: form.control,
+    name: "rootfs_size",
+  })
+  const watchedDiskSize = useWatch({
+    control: form.control,
+    name: "disk_size",
+  })
+  const watchedStartAt = useWatch({ control: form.control, name: "start_at" })
+  const watchedEndAt = useWatch({ control: form.control, name: "end_at" })
 
-  // 是否為腳本部署模式（選了有 install_methods 的服務模板）
-  const isScriptDeploy = Boolean(
-    selectedFastTemplate?.type === "ct" &&
-      selectedFastTemplate?.install_methods?.length,
+  function getSelectedTemplateLabel() {
+    if (resourceType === "lxc") {
+      if (!watchedOsTemplate) return serviceTemplateName || "尚未選擇"
+      const matchedTemplate = lxcTemplates?.find(
+        (template) => template.volid === watchedOsTemplate,
+      )
+      return (
+        serviceTemplateName ||
+        matchedTemplate?.volid.split("/").pop()?.replace(".tar.zst", "") ||
+        watchedOsTemplate
+      )
+    }
+
+    if (!watchedTemplateId) return "尚未選擇"
+    return (
+      vmTemplates?.find((template) => template.vmid === watchedTemplateId)?.name ||
+      `Template #${watchedTemplateId}`
+    )
+  }
+
+  const requestSpecSummary = useMemo(() => {
+    const memoryGb = (Number(watchedMemory || 0) / 1024).toFixed(1)
+    const storageGb =
+      resourceType === "vm"
+        ? Number(watchedDiskSize || 0)
+        : Number(watchedRootfsSize || 0)
+    const storageLabel = resourceType === "vm" ? "Disk" : "Rootfs"
+
+    return `${Number(watchedCores || 0)} Core / ${memoryGb} GB RAM / ${storageGb} GB ${storageLabel}`
+  }, [
+    resourceType,
+    watchedCores,
+    watchedDiskSize,
+    watchedMemory,
+    watchedRootfsSize,
+  ])
+
+  const requestWindowSummary = useMemo(
+    () => formatScheduleSummary(watchedStartAt, watchedEndAt),
+    [watchedEndAt, watchedStartAt],
   )
 
   const isSubmitReady = useMemo(() => {
-    const reasonReady = needsApproval ? Boolean(watchedReason?.trim()) : true
+    const reasonReady = Boolean(watchedReason?.trim())
     const basicReady = Boolean(
       reasonReady && watchedHostname?.trim() && watchedPassword,
     )
+    const slotReady = Boolean(watchedStartAt && watchedEndAt)
 
-    if (!basicReady) return false
-
-    // 腳本部署模式只需 hostname + password
-    if (isScriptDeploy) return true
+    if (!basicReady || !slotReady) return false
 
     if (watchedResourceType === "vm") {
       return Boolean(watchedTemplateId && watchedUsername?.trim())
@@ -206,11 +270,13 @@ export function ApplicationRequestPage() {
     watchedPassword,
     watchedReason,
     watchedResourceType,
+    watchedStartAt,
     watchedTemplateId,
+    watchedEndAt,
     watchedUsername,
-    needsApproval,
-    isScriptDeploy,
   ])
+
+  const requestReadinessLabel = isSubmitReady ? "可送出申請" : "尚有欄位待完成"
 
   const { data: lxcTemplates, isLoading: lxcTemplatesLoading } = useQuery({
     queryKey: ["lxc-templates"],
@@ -224,56 +290,31 @@ export function ApplicationRequestPage() {
     enabled: resourceType === "vm",
   })
 
+  const selectedTemplateLabel = useMemo(
+    () => getSelectedTemplateLabel(),
+    [
+      lxcTemplates,
+      resourceType,
+      serviceTemplateName,
+      vmTemplates,
+      watchedOsTemplate,
+      watchedTemplateId,
+    ],
+  )
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mutation = useMutation<any, Error, FormData>({
     mutationFn: (data: FormData) => {
-      if (needsApproval) {
-        if (data.resource_type === "lxc") {
-          if (!data.ostemplate || !data.rootfs_size) {
-            throw new Error(t("validation:requirement.lxc"))
-          }
-          return VmRequestsService.createVmRequest({
-            requestBody: {
-              reason: data.reason!,
-              resource_type: "lxc",
-              hostname: data.hostname,
-              ostemplate: data.ostemplate,
-              rootfs_size: data.rootfs_size,
-              cores: data.cores,
-              memory: data.memory,
-              password: data.password,
-              storage: data.storage,
-              os_info: data.os_info || null,
-              expiry_date: data.expiry_date || null,
-            },
-          })
-        }
-        if (!data.template_id || !data.disk_size || !data.username) {
-          throw new Error(t("validation:requirement.vm"))
-        }
-        return VmRequestsService.createVmRequest({
-          requestBody: {
-            reason: data.reason!,
-            resource_type: "vm",
-            hostname: data.hostname,
-            template_id: data.template_id,
-            username: data.username,
-            password: data.password,
-            cores: data.cores,
-            memory: data.memory,
-            disk_size: data.disk_size,
-            os_info: data.os_info || null,
-            expiry_date: data.expiry_date || null,
-          },
-        })
-      }
-
       if (data.resource_type === "lxc") {
         if (!data.ostemplate || !data.rootfs_size) {
           throw new Error(t("validation:requirement.lxc"))
         }
-        return LxcService.createLxc({
+        return VmRequestsService.createVmRequest({
           requestBody: {
+            reason: data.reason,
+            resource_type: "lxc",
+            environment_type:
+              serviceTemplateName || t("resources:create.customSpec"),
             hostname: data.hostname,
             ostemplate: data.ostemplate,
             cores: data.cores,
@@ -281,20 +322,20 @@ export function ApplicationRequestPage() {
             rootfs_size: data.rootfs_size,
             password: data.password,
             storage: data.storage,
-            environment_type:
-              serviceTemplateName || t("resources:create.customSpec"),
             os_info: data.os_info || null,
-            expiry_date: data.expiry_date || null,
-            start: true,
-            unprivileged: true,
+            start_at: data.start_at,
+            end_at: data.end_at,
           },
         })
       }
       if (!data.template_id || !data.disk_size || !data.username) {
         throw new Error(t("validation:requirement.vm"))
       }
-      return VmService.createVm({
+      return VmRequestsService.createVmRequest({
         requestBody: {
+          reason: data.reason,
+          resource_type: "vm",
+          environment_type: t("resources:create.customSpec"),
           hostname: data.hostname,
           template_id: data.template_id,
           username: data.username,
@@ -302,25 +343,16 @@ export function ApplicationRequestPage() {
           cores: data.cores,
           memory: data.memory,
           disk_size: data.disk_size,
-          environment_type: t("resources:create.customSpec"),
           os_info: data.os_info || null,
-          expiry_date: data.expiry_date || null,
-          start: true,
+          start_at: data.start_at,
+          end_at: data.end_at,
         },
       })
     },
-    onSuccess: (data) => {
-      if (needsApproval) {
-        showSuccessToast(t("messages:success.applicationSubmitted"))
-        queryClient.invalidateQueries({ queryKey: ["vm-requests"] })
-        navigate({ to: "/applications" })
-      } else {
-        showSuccessToast(
-          `${(data as { message?: string }).message || t("messages:success.resourceCreated")}`,
-        )
-        queryClient.invalidateQueries({ queryKey: ["resources"] })
-        navigate({ to: "/resources" })
-      }
+    onSuccess: () => {
+      showSuccessToast(t("messages:success.applicationSubmitted"))
+      queryClient.invalidateQueries({ queryKey: ["vm-requests"] })
+      navigate({ to: "/applications" })
     },
     onError: (err) => handleError.call(showErrorToast, err as ApiError),
   })
@@ -386,7 +418,6 @@ export function ApplicationRequestPage() {
     (template: FastTemplate) => {
       setServiceTemplateName(template.name || "")
       setServiceTemplateSlug(template.slug || "")
-      setSelectedFastTemplate(template)
       setResourceType("lxc")
       updateFormValue("resource_type", "lxc")
       if (template.name) {
@@ -405,20 +436,6 @@ export function ApplicationRequestPage() {
   )
 
   const onSubmit = (data: FormData) => {
-    if (isScriptDeploy && !needsApproval) {
-      // 腳本部署模式：切換到整頁部署進度
-      setDeployFormData({
-        hostname: data.hostname,
-        password: data.password,
-        cpu: data.cores,
-        ram: data.memory,
-        disk: data.rootfs_size ?? 8,
-        unprivileged: true,
-        ssh: false,
-      })
-      setShowDeployPage(true)
-      return
-    }
     mutation.mutate(data)
   }
 
@@ -486,35 +503,12 @@ export function ApplicationRequestPage() {
     }
   }, [desktopPanelFrame])
 
-  // 整頁部署進度
-  if (showDeployPage && selectedFastTemplate && deployFormData) {
-    return (
-      <div
-        className={`mx-auto flex w-full max-w-[760px] flex-col gap-6`}
-      >
-        <ScriptDeployPage
-          template={selectedFastTemplate}
-          formData={deployFormData}
-          onBack={() => {
-            setShowDeployPage(false)
-            setDeployFormData(null)
-            queryClient.invalidateQueries({ queryKey: ["resources"] })
-          }}
-          onComplete={() => {
-            queryClient.invalidateQueries({ queryKey: ["resources"] })
-            navigate({ to: "/resources" })
-          }}
-        />
-      </div>
-    )
-  }
-
   return (
     <div
-      className={`mx-auto flex w-full ${needsApproval ? "max-w-[1180px]" : "max-w-[760px]"} flex-col gap-6`}
+      className={`mx-auto flex w-full ${showAiAssistant ? "max-w-[1180px]" : "max-w-[760px]"} flex-col gap-6`}
     >
       <div
-        className={`grid items-start gap-6 ${needsApproval ? "lg:grid-cols-[minmax(0,1fr)_400px] xl:grid-cols-[minmax(0,1fr)_420px]" : ""}`}
+        className={`grid items-start gap-6 ${showAiAssistant ? "lg:grid-cols-[minmax(0,1fr)_400px] xl:grid-cols-[minmax(0,1fr)_420px]" : ""}`}
       >
         <div className="min-w-0 max-w-[760px] space-y-6">
           <div className="flex items-start gap-3">
@@ -525,7 +519,7 @@ export function ApplicationRequestPage() {
               className="mt-0.5 shrink-0"
             >
               <Link
-                to={needsApproval ? "/applications" : "/resources"}
+                to="/applications"
                 aria-label={t("common:buttons.back")}
               >
                 <ArrowLeft className="h-4 w-4" />
@@ -533,14 +527,10 @@ export function ApplicationRequestPage() {
             </Button>
             <div className="min-w-0">
               <h1 className="text-2xl font-bold tracking-tight">
-                {needsApproval
-                  ? t("applications:create.heading")
-                  : t("resources:create.heading")}
+                {t("applications:create.heading")}
               </h1>
               <p className="text-muted-foreground">
-                {needsApproval
-                  ? t("applications:create.description")
-                  : t("resources:create.description")}
+                {t("applications:create.description")}
               </p>
             </div>
           </div>
@@ -604,7 +594,6 @@ export function ApplicationRequestPage() {
                         )}
                       />
 
-                      {!isScriptDeploy && (
                       <FormField
                         control={form.control}
                         name="ostemplate"
@@ -653,7 +642,6 @@ export function ApplicationRequestPage() {
                           </FormItem>
                         )}
                       />
-                      )}
 
                       <FormItem>
                         <FormLabel>
@@ -680,7 +668,6 @@ export function ApplicationRequestPage() {
                               onClick={() => {
                                 setServiceTemplateName("")
                                 setServiceTemplateSlug("")
-                                setSelectedFastTemplate(null)
                               }}
                             >
                               <X className="h-3.5 w-3.5" />
@@ -738,21 +725,6 @@ export function ApplicationRequestPage() {
                         )}
                       />
 
-                      <FormField
-                        control={form.control}
-                        name="expiry_date"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>
-                              {t("resources:form.expiryDate")}
-                            </FormLabel>
-                            <FormControl>
-                              <Input type="date" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
                     </div>
 
                     <div className="rounded-2xl border bg-muted/20 p-5">
@@ -1013,21 +985,6 @@ export function ApplicationRequestPage() {
                         )}
                       />
 
-                      <FormField
-                        control={form.control}
-                        name="expiry_date"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>
-                              {t("resources:form.expiryDate")}
-                            </FormLabel>
-                            <FormControl>
-                              <Input type="date" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
                     </div>
 
                     <div className="rounded-2xl border bg-muted/20 p-5">
@@ -1154,40 +1111,117 @@ export function ApplicationRequestPage() {
                     </div>
                   </TabsContent>
 
-                  {needsApproval && (
-                    <FormField
-                      control={form.control}
-                      name="reason"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>
-                            {t("applications:form.reason")}{" "}
-                            <span className="text-destructive">*</span>
-                          </FormLabel>
-                          <FormControl>
-                            <Textarea
-                              {...field}
-                              className="min-h-[140px] resize-y"
-                              placeholder={t(
-                                "applications:form.reasonPlaceholder",
-                              )}
-                              required
-                            />
-                          </FormControl>
-                          <div className="flex justify-end text-xs text-muted-foreground">
-                            {(field.value || "").length}
-                          </div>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  )}
+                  <FormField
+                    control={form.control}
+                    name="reason"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          {t("applications:form.reason")}{" "}
+                          <span className="text-destructive">*</span>
+                        </FormLabel>
+                        <FormControl>
+                          <Textarea
+                            {...field}
+                            className="min-h-[140px] resize-y"
+                            placeholder={t(
+                              "applications:form.reasonPlaceholder",
+                            )}
+                            required
+                          />
+                        </FormControl>
+                        <div className="flex justify-end text-xs text-muted-foreground">
+                          {(field.value || "").length}
+                        </div>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
                 </Tabs>
+                <RequestAvailabilityPanel
+                  mode="draft"
+                  onChange={(value) => {
+                    updateFormValue("start_at", value.start_at ?? "")
+                    updateFormValue("end_at", value.end_at ?? "")
+                  }}
+                  draft={{
+                    resource_type: resourceType,
+                    cores: Number(watchedCores || 0),
+                    memory: Number(watchedMemory || 0),
+                    disk_size:
+                      resourceType === "vm"
+                        ? Number(watchedDiskSize || 0)
+                        : null,
+                    rootfs_size:
+                      resourceType === "lxc"
+                        ? Number(watchedRootfsSize || 0)
+                        : null,
+                    instance_count: 1,
+                    days: 7,
+                    timezone: "Asia/Taipei",
+                  }}
+                />
+                <section className="hidden rounded-2xl border bg-card/60 p-5">
+                  <div className="flex flex-col gap-3 border-b border-border/70 pb-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h3 className="text-lg font-semibold tracking-tight">
+                        申請摘要
+                      </h3>
+                      <p className="text-sm text-muted-foreground">
+                        送出前先確認這筆申請會提交的內容，讓這裡的顯示資訊和審核頁看到的摘要更一致。
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full border border-border/70 bg-background/70 px-3 py-1 text-xs font-medium text-muted-foreground">
+                        {resourceType === "vm" ? "QEMU 虛擬機" : "LXC 容器"}
+                      </span>
+                      <span className="rounded-full bg-teal-500/15 px-3 py-1 text-xs font-medium text-teal-300">
+                        {requestReadinessLabel}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                    <div className="rounded-xl border border-border/70 bg-background/40 px-4 py-2">
+                      <SummaryRow
+                        label="主機名稱"
+                        value={watchedHostname?.trim() || "尚未填寫"}
+                      />
+                      <SummaryRow
+                        label="映像 / 模板"
+                        value={selectedTemplateLabel}
+                      />
+                      <SummaryRow label="規格" value={requestSpecSummary} />
+                      <SummaryRow
+                        label="時段"
+                        value={requestWindowSummary}
+                      />
+                    </div>
+
+                    <div className="rounded-xl border border-border/70 bg-background/40 px-4 py-3">
+                      <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                        申請原因
+                      </div>
+                      <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-foreground/90">
+                        {watchedReason?.trim() ||
+                          "尚未填寫申請原因。建議在這裡說明用途、課程或專案背景，以及需要這個時段的原因。"}
+                      </p>
+                    </div>
+                  </div>
+                </section>
                 <div className="flex flex-col gap-3 border-t pt-6 sm:flex-row sm:items-center sm:justify-between">
-                  {needsApproval ? (
-                    <p className="text-sm text-muted-foreground">
-                      {t("applications:aiChat.title")}
+                  {showAiAssistant ? (
+                    <>
+                      <p className="text-sm text-muted-foreground">
+                        使用 AI 協助整理需求後，再確認規格、可申請時段與申請原因。
+                      </p>
+                      <p className="hidden text-sm text-muted-foreground">
+                        使用 AI 協助整理需求後，再確認規格、可申請時段與申請原因。
+                      </p>
+                      <p className="hidden text-sm text-muted-foreground">
+                      使用 AI 協助整理需求後，再確認規格、可申請時段與申請原因。
                     </p>
+                    </>
                   ) : (
                     <div />
                   )}
@@ -1197,7 +1231,7 @@ export function ApplicationRequestPage() {
                       variant="outline"
                       onClick={() =>
                         navigate({
-                          to: needsApproval ? "/applications" : "/resources",
+                          to: "/applications",
                         })
                       }
                       disabled={mutation.isPending}
@@ -1209,9 +1243,7 @@ export function ApplicationRequestPage() {
                       loading={mutation.isPending}
                       disabled={!isSubmitReady}
                     >
-                      {needsApproval
-                        ? t("applications:create.submitButton")
-                        : t("resources:create.submitButton")}
+                      {t("applications:create.submitButton")}
                     </LoadingButton>
                   </div>
                 </div>
@@ -1220,7 +1252,7 @@ export function ApplicationRequestPage() {
           )}
         </div>
 
-        {needsApproval && (
+        {showAiAssistant && (
           <aside
             ref={aiColumnRef}
             className="min-w-0 lg:min-h-[32rem]"

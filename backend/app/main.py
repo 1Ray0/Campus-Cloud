@@ -1,6 +1,7 @@
-import sentry_sdk
+import asyncio
 from contextlib import asynccontextmanager
 
+import sentry_sdk
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
@@ -13,6 +14,7 @@ from app.api.websocket.terminal import terminal_proxy
 from app.core.config import settings
 from app.core.redis import close_redis, init_redis
 from app.exceptions import AppError
+from app.services import vm_request_schedule_service
 
 
 _SECURITY_HEADERS: list[tuple[str, str]] = [
@@ -66,12 +68,21 @@ class SecurityHeadersMiddleware:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """應用生命週期管理"""
-    # Startup: 初始化 Redis
     await init_redis()
-    yield
-    # Shutdown: 關閉 Redis
-    await close_redis()
+    stop_event = asyncio.Event()
+    scheduler_task = asyncio.create_task(
+        vm_request_schedule_service.run_scheduler(stop_event)
+    )
+    try:
+        yield
+    finally:
+        stop_event.set()
+        scheduler_task.cancel()
+        try:
+            await scheduler_task
+        except asyncio.CancelledError:
+            pass
+        await close_redis()
 
 
 def custom_generate_unique_id(route: APIRoute) -> str:
@@ -80,7 +91,9 @@ def custom_generate_unique_id(route: APIRoute) -> str:
 
 if settings.SENTRY_DSN:
     sentry_sdk.init(
-        dsn=str(settings.SENTRY_DSN), traces_sample_rate=1.0, send_default_pii=False
+        dsn=str(settings.SENTRY_DSN),
+        traces_sample_rate=1.0,
+        send_default_pii=False,
     )
 
 app = FastAPI(

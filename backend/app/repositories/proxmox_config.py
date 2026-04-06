@@ -29,9 +29,27 @@ def upsert_proxmox_config(
     gateway_ip: str = "",
     local_subnet: str | None = None,
     default_node: str | None = None,
-    placement_strategy: str = "dominant_share_min",
+    placement_strategy: str = "priority_dominant_share",
     cpu_overcommit_ratio: float = 2.0,
     disk_overcommit_ratio: float = 1.0,
+    migration_enabled: bool = True,
+    migration_max_per_rebalance: int = 2,
+    migration_min_interval_minutes: int = 60,
+    migration_retry_limit: int = 3,
+    rebalance_migration_cost: float = 0.15,
+    rebalance_peak_cpu_margin: float = 1.1,
+    rebalance_peak_memory_margin: float = 1.05,
+    rebalance_loadavg_warn_per_core: float = 0.8,
+    rebalance_loadavg_max_per_core: float = 1.5,
+    rebalance_loadavg_penalty_weight: float = 0.9,
+    rebalance_disk_contention_warn_share: float = 0.7,
+    rebalance_disk_contention_high_share: float = 0.9,
+    rebalance_disk_penalty_weight: float = 0.75,
+    rebalance_search_max_relocations: int = 2,
+    rebalance_search_depth: int = 3,
+    migration_worker_concurrency: int = 2,
+    migration_job_claim_timeout_seconds: int = 300,
+    migration_retry_backoff_seconds: int = 120,
 ) -> ProxmoxConfig:
     config = session.get(ProxmoxConfig, _SINGLETON_ID)
 
@@ -56,6 +74,24 @@ def upsert_proxmox_config(
             placement_strategy=placement_strategy,
             cpu_overcommit_ratio=cpu_overcommit_ratio,
             disk_overcommit_ratio=disk_overcommit_ratio,
+            migration_enabled=migration_enabled,
+            migration_max_per_rebalance=migration_max_per_rebalance,
+            migration_min_interval_minutes=migration_min_interval_minutes,
+            migration_retry_limit=migration_retry_limit,
+            rebalance_migration_cost=rebalance_migration_cost,
+            rebalance_peak_cpu_margin=rebalance_peak_cpu_margin,
+            rebalance_peak_memory_margin=rebalance_peak_memory_margin,
+            rebalance_loadavg_warn_per_core=rebalance_loadavg_warn_per_core,
+            rebalance_loadavg_max_per_core=rebalance_loadavg_max_per_core,
+            rebalance_loadavg_penalty_weight=rebalance_loadavg_penalty_weight,
+            rebalance_disk_contention_warn_share=rebalance_disk_contention_warn_share,
+            rebalance_disk_contention_high_share=rebalance_disk_contention_high_share,
+            rebalance_disk_penalty_weight=rebalance_disk_penalty_weight,
+            rebalance_search_max_relocations=rebalance_search_max_relocations,
+            rebalance_search_depth=rebalance_search_depth,
+            migration_worker_concurrency=migration_worker_concurrency,
+            migration_job_claim_timeout_seconds=migration_job_claim_timeout_seconds,
+            migration_retry_backoff_seconds=migration_retry_backoff_seconds,
         )
         session.add(config)
     else:
@@ -77,6 +113,24 @@ def upsert_proxmox_config(
         config.placement_strategy = placement_strategy
         config.cpu_overcommit_ratio = cpu_overcommit_ratio
         config.disk_overcommit_ratio = disk_overcommit_ratio
+        config.migration_enabled = migration_enabled
+        config.migration_max_per_rebalance = migration_max_per_rebalance
+        config.migration_min_interval_minutes = migration_min_interval_minutes
+        config.migration_retry_limit = migration_retry_limit
+        config.rebalance_migration_cost = rebalance_migration_cost
+        config.rebalance_peak_cpu_margin = rebalance_peak_cpu_margin
+        config.rebalance_peak_memory_margin = rebalance_peak_memory_margin
+        config.rebalance_loadavg_warn_per_core = rebalance_loadavg_warn_per_core
+        config.rebalance_loadavg_max_per_core = rebalance_loadavg_max_per_core
+        config.rebalance_loadavg_penalty_weight = rebalance_loadavg_penalty_weight
+        config.rebalance_disk_contention_warn_share = rebalance_disk_contention_warn_share
+        config.rebalance_disk_contention_high_share = rebalance_disk_contention_high_share
+        config.rebalance_disk_penalty_weight = rebalance_disk_penalty_weight
+        config.rebalance_search_max_relocations = rebalance_search_max_relocations
+        config.rebalance_search_depth = rebalance_search_depth
+        config.migration_worker_concurrency = migration_worker_concurrency
+        config.migration_job_claim_timeout_seconds = migration_job_claim_timeout_seconds
+        config.migration_retry_backoff_seconds = migration_retry_backoff_seconds
         config.updated_at = datetime.now(timezone.utc)
         session.add(config)
 

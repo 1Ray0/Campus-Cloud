@@ -1,0 +1,70 @@
+import type { CancelablePromise } from "@/client"
+import { OpenAPI } from "@/client"
+import { request as __request } from "@/client/core/request"
+import type { VMRequestPublic } from "@/client/types.gen"
+
+export type VmRequestReviewRuntimeResource = {
+  vmid: number
+  name: string
+  node: string
+  resource_type: string
+  status: string
+  linked_request_id?: string | null
+  linked_hostname?: string | null
+  linked_actual_node?: string | null
+  linked_desired_node?: string | null
+}
+
+export type VmRequestReviewOverlapItem = {
+  request_id: string
+  hostname: string
+  resource_type: string
+  start_at?: string | null
+  end_at?: string | null
+  vmid?: number | null
+  status: "pending" | "approved" | "rejected"
+  assigned_node?: string | null
+  desired_node?: string | null
+  actual_node?: string | null
+  projected_node?: string | null
+  projected_strategy?: string | null
+  migration_status: "idle" | "pending" | "running" | "completed" | "failed" | "blocked"
+  is_current_request: boolean
+  is_running_now: boolean
+  is_provisioned: boolean
+}
+
+export type VmRequestReviewProjectedNode = {
+  node: string
+  request_count: number
+  includes_current_request: boolean
+  hostnames: string[]
+}
+
+export type VmRequestReviewContext = {
+  request: VMRequestPublic
+  window_start: string
+  window_end: string
+  window_active_now: boolean
+  feasible: boolean
+  placement_strategy?: string | null
+  projected_node?: string | null
+  summary: string
+  reasons: string[]
+  warnings: string[]
+  cluster_nodes: string[]
+  current_running_resources: VmRequestReviewRuntimeResource[]
+  overlapping_approved_requests: VmRequestReviewOverlapItem[]
+  projected_nodes: VmRequestReviewProjectedNode[]
+}
+
+export const VmRequestReviewService = {
+  getContext(data: { requestId: string }): CancelablePromise<VmRequestReviewContext> {
+    return __request(OpenAPI, {
+      method: "GET",
+      url: "/api/v1/vm-requests/{request_id}/review-context",
+      path: { request_id: data.requestId },
+      errors: { 422: "Validation Error" },
+    })
+  },
+}

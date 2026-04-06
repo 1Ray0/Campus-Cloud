@@ -3,14 +3,19 @@ import uuid
 from fastapi import APIRouter, Query
 
 from app.api.deps import AdminUser, CurrentUser, SessionDep
+from app.exceptions import PermissionDeniedError
+from app.models import UserRole
 from app.schemas import (
+    VMRequestAvailabilityRequest,
+    VMRequestAvailabilityResponse,
     VMRequestCreate,
     VMRequestPublic,
+    VMRequestReviewContext,
     VMRequestReview,
     VMRequestsPublic,
 )
 from app.models import VMRequestStatus
-from app.services import vm_request_service
+from app.services import vm_request_availability_service, vm_request_service
 
 router = APIRouter(prefix="/vm-requests", tags=["vm-requests"])
 
@@ -24,6 +29,19 @@ def create_vm_request(
     )
 
 
+@router.post("/availability", response_model=VMRequestAvailabilityResponse)
+def get_vm_request_availability(
+    request_in: VMRequestAvailabilityRequest,
+    session: SessionDep,
+    current_user: CurrentUser,
+):
+    return vm_request_availability_service.assess_request(
+        session=session,
+        current_user=current_user,
+        request_in=request_in,
+    )
+
+
 @router.get("/my", response_model=VMRequestsPublic)
 def list_my_vm_requests(
     session: SessionDep,
@@ -31,6 +49,9 @@ def list_my_vm_requests(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=100),
 ):
+    if current_user.role != UserRole.student:
+        raise PermissionDeniedError("Only students can view their VM requests")
+
     return vm_request_service.list_by_user(
         session=session, user_id=current_user.id, skip=skip, limit=limit
     )
@@ -55,6 +76,36 @@ def get_vm_request(
 ):
     return vm_request_service.get(
         session=session, request_id=request_id, current_user=current_user
+    )
+
+
+@router.get("/{request_id}/review-context", response_model=VMRequestReviewContext)
+def get_vm_request_review_context(
+    request_id: uuid.UUID,
+    session: SessionDep,
+    current_user: AdminUser,
+):
+    return vm_request_service.get_review_context(
+        session=session,
+        request_id=request_id,
+        current_user=current_user,
+    )
+
+
+@router.get("/{request_id}/availability", response_model=VMRequestAvailabilityResponse)
+def get_existing_vm_request_availability(
+    request_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+    days: int = Query(default=7, ge=1, le=14),
+    timezone: str = Query(default="Asia/Taipei", min_length=1, max_length=64),
+):
+    return vm_request_availability_service.assess_existing_request(
+        session=session,
+        request_id=request_id,
+        current_user=current_user,
+        days=days,
+        timezone=timezone,
     )
 
 

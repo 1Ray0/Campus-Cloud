@@ -28,7 +28,7 @@ export const Route = createFileRoute("/_layout/approvals")({
     const user = await UsersService.readUserMe()
     if (!(user.role === "admin" || user.is_superuser)) {
       throw redirect({
-        to: "/",
+        to: "/applications",
       })
     }
   },

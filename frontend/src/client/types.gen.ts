@@ -1050,6 +1050,8 @@ export type VMRequestCreate = {
     environment_type?: string;
     os_info?: (string | null);
     expiry_date?: (string | null);
+    start_at: string;
+    end_at: string;
     ostemplate?: (string | null);
     rootfs_size?: (number | null);
     template_id?: (number | null);
@@ -1074,6 +1076,8 @@ export type VMRequestPublic = {
     environment_type: string;
     os_info?: (string | null);
     expiry_date?: (string | null);
+    start_at?: (string | null);
+    end_at?: (string | null);
     ostemplate?: (string | null);
     rootfs_size?: (number | null);
     template_id?: (number | null);
@@ -1084,6 +1088,8 @@ export type VMRequestPublic = {
     review_comment?: (string | null);
     reviewed_at?: (string | null);
     vmid?: (number | null);
+    assigned_node?: (string | null);
+    placement_strategy_used?: (string | null);
     created_at: string;
 };
 

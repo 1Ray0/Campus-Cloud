@@ -1,16 +1,44 @@
 import logging
 import time
 import uuid
+from datetime import UTC, datetime
 
 from sqlmodel import Session
 
 from app.exceptions import BadRequestError, ProxmoxError
+from app.repositories import vm_request as vm_request_repo
 from app.schemas import ResourcePublic
 from app.repositories import resource as resource_repo
 from app.repositories import audit_log as audit_log_repo
 from app.services import audit_service, firewall_service, proxmox_service
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _enforce_start_window(*, session: Session, vmid: int) -> None:
+    request = vm_request_repo.get_latest_approved_vm_request_by_vmid(
+        session=session,
+        vmid=vmid,
+    )
+    if not request or not request.start_at or not request.end_at:
+        return
+
+    now = _utc_now()
+    start_at = request.start_at
+    end_at = request.end_at
+    if start_at.tzinfo is None:
+        start_at = start_at.replace(tzinfo=UTC)
+    if end_at.tzinfo is None:
+        end_at = end_at.replace(tzinfo=UTC)
+
+    if now < start_at:
+        raise BadRequestError("This resource can only be started when its approved time window begins.")
+    if now >= end_at:
+        raise BadRequestError("This resource can no longer be started because its approved time window has ended.")
 
 
 def _from_punycode_hostname(hostname: str) -> str:
@@ -151,6 +179,9 @@ def control(
     try:
         node = resource_info["node"]
         resource_type = resource_info["type"]
+
+        if action == "start":
+            _enforce_start_window(session=session, vmid=vmid)
 
         proxmox_service.control(node, vmid, resource_type, action)
 

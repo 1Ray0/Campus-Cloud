@@ -76,6 +76,8 @@ class NodeSnapshot(BaseModel):
     maxdisk_bytes: int = Field(default=0, ge=0)
     uptime: int | None = Field(default=None, ge=0)
     gpu_count: int = Field(default=0, ge=0)
+    current_loadavg_1: float | None = Field(default=None, ge=0.0)
+    average_loadavg_1: float | None = Field(default=None, ge=0.0)
 
 
 class ResourceSnapshot(BaseModel):
@@ -104,6 +106,8 @@ class NodeCapacity(BaseModel):
     allocatable_memory_bytes: int = Field(default=0, ge=0)
     total_disk_bytes: int = Field(default=0, ge=0)
     allocatable_disk_bytes: int = Field(default=0, ge=0)
+    current_loadavg_1: float | None = Field(default=None, ge=0.0)
+    average_loadavg_1: float | None = Field(default=None, ge=0.0)
 
 
 class PlacementDecision(BaseModel):

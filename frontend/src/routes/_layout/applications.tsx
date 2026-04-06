@@ -1,10 +1,10 @@
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, redirect } from "@tanstack/react-router"
 import { FileText } from "lucide-react"
 import { Suspense, useMemo } from "react"
 import { useTranslation } from "react-i18next"
 
-import { VmRequestsService } from "@/client"
+import { UsersService, VmRequestsService } from "@/client"
 import CreateVMRequest from "@/components/Applications/CreateVMRequest"
 import { createMyRequestColumns } from "@/components/Applications/columns"
 import { DataTable } from "@/components/Common/DataTable"
@@ -19,6 +19,14 @@ function getMyRequestsQueryOptions() {
 
 export const Route = createFileRoute("/_layout/applications")({
   component: Applications,
+  beforeLoad: async () => {
+    const user = await UsersService.readUserMe()
+    if (user.role !== "student") {
+      throw redirect({
+        to: "/",
+      })
+    }
+  },
   head: () => ({
     meta: [
       {

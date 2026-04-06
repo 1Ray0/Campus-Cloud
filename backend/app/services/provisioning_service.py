@@ -1,6 +1,7 @@
 import logging
 import uuid
 from collections.abc import Iterable
+from datetime import UTC, datetime
 
 from sqlmodel import Session
 
@@ -15,10 +16,36 @@ from app.schemas import (
     VMCreateResponse,
     VMTemplateSchema,
 )
+from app.ai.pve_advisor import recommendation_service as advisor_service
 from app.repositories import resource as resource_repo
-from app.services import audit_service, firewall_service, proxmox_service
+from app.repositories import vm_request as vm_request_repo
+from app.services import (
+    audit_service,
+    firewall_service,
+    proxmox_service,
+    vm_request_placement_service,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def should_start_now(db_request) -> bool:
+    if not getattr(db_request, "start_at", None):
+        return True
+
+    start_at = db_request.start_at
+    end_at = getattr(db_request, "end_at", None)
+    if start_at.tzinfo is None:
+        start_at = start_at.replace(tzinfo=UTC)
+    if end_at and end_at.tzinfo is None:
+        end_at = end_at.replace(tzinfo=UTC)
+    if end_at and end_at <= _utc_now():
+        return False
+    return start_at <= _utc_now()
 
 
 def _to_punycode_hostname(hostname: str) -> str:
@@ -82,6 +109,79 @@ def cleanup_provisioned_resource(vmid: int) -> None:
     _cleanup_failed_resource(resource["node"], vmid, resource["type"])
 
 
+def _select_request_placement(
+    *,
+    session: Session,
+    db_request,
+    placement_request,
+    placement_strategy: str,
+):
+    pinned_node = getattr(db_request, "desired_node", None) or getattr(
+        db_request, "assigned_node", None
+    )
+    if pinned_node:
+        nodes, resources = advisor_service._load_cluster_state()
+        cpu_overcommit_ratio, disk_overcommit_ratio = (
+            vm_request_placement_service.get_overcommit_ratios(session)
+        )
+        node_capacities = advisor_service._build_node_capacities(
+            nodes=nodes,
+            resources=resources,
+            cpu_overcommit_ratio=cpu_overcommit_ratio,
+            disk_overcommit_ratio=disk_overcommit_ratio,
+        )
+        node_capacities = [
+            item for item in node_capacities if item.node == str(pinned_node)
+        ]
+        effective_resource_type, resource_type_reason = advisor_service._decide_resource_type(
+            placement_request
+        )
+        placement = vm_request_placement_service.CurrentPlacementSelection(
+            node=str(pinned_node),
+            strategy=placement_strategy,
+            plan=vm_request_placement_service.build_plan(
+                session=session,
+                request=placement_request,
+                node_capacities=node_capacities,
+                effective_resource_type=effective_resource_type,
+                resource_type_reason=resource_type_reason,
+                placement_strategy=placement_strategy,
+                node_priorities=vm_request_placement_service.get_node_priorities(session),
+            ),
+        )
+        if not placement.plan.feasible or not placement.node:
+            reserved_requests = []
+            if getattr(db_request, "start_at", None) and getattr(db_request, "end_at", None):
+                reserved_requests = [
+                    item
+                    for item in vm_request_repo.get_approved_vm_requests_overlapping_window(
+                        session=session,
+                        window_start=db_request.start_at,
+                        window_end=db_request.end_at,
+                    )
+                    if item.id != db_request.id
+                ]
+            fallback = vm_request_placement_service.select_reserved_target_node(
+                session=session,
+                db_request=db_request,
+                reserved_requests=reserved_requests,
+            )
+            if fallback.node and fallback.plan.feasible:
+                logger.warning(
+                    "Reserved node %s is no longer feasible for request %s; falling back to %s",
+                    pinned_node,
+                    getattr(db_request, "id", "unknown"),
+                    fallback.node,
+                )
+                return fallback
+        return placement
+
+    return vm_request_placement_service.select_current_target_node(
+        session=session,
+        db_request=db_request,
+    )
+
+
 def _get_lxc_target_node() -> str:
     return proxmox_service.pick_target_node()
 
@@ -89,6 +189,33 @@ def _get_lxc_target_node() -> str:
 def _get_vm_target_node(template_id: int) -> str:
     template = proxmox_service.find_vm_template(template_id)
     return template["node"]
+
+
+def _resolve_managed_storage(
+    *,
+    session: Session,
+    node: str,
+    resource_type: str,
+    requested_storage: str | None,
+    disk_gb: int,
+    required_content: str,
+) -> str:
+    preferred_storage = vm_request_placement_service.select_best_storage_name(
+        session=session,
+        node_name=node,
+        resource_type=resource_type,
+        disk_gb=disk_gb,
+        fallback_storage=requested_storage,
+    )
+    if preferred_storage is None:
+        raise ProxmoxError(
+            f"No enabled managed storage is available on node {node} for {resource_type}"
+        )
+    return proxmox_service.resolve_target_storage(
+        node,
+        preferred_storage,
+        required_content=required_content,
+    )
 
 
 def _dedupe_templates(templates: Iterable[dict]) -> list[dict]:
@@ -105,9 +232,12 @@ def create_lxc(
 ) -> LXCCreateResponse:
     vmid = proxmox_service.next_vmid()
     target_node = _get_lxc_target_node()
-    target_storage = proxmox_service.resolve_target_storage(
-        target_node,
-        lxc_data.storage,
+    target_storage = _resolve_managed_storage(
+        session=session,
+        node=target_node,
+        resource_type="lxc",
+        requested_storage=lxc_data.storage,
+        disk_gb=int(lxc_data.rootfs_size or 8),
         required_content="rootdir",
     )
     created = False
@@ -176,9 +306,12 @@ def create_vm(
 ) -> VMCreateResponse:
     new_vmid = proxmox_service.next_vmid()
     target_node = _get_vm_target_node(vm_data.template_id)
-    target_storage = proxmox_service.resolve_target_storage(
-        target_node,
-        vm_data.storage,
+    target_storage = _resolve_managed_storage(
+        session=session,
+        node=target_node,
+        resource_type="vm",
+        requested_storage=vm_data.storage,
+        disk_gb=int(vm_data.disk_size or 20),
         required_content="images",
     )
     created = False
@@ -253,27 +386,42 @@ def create_vm(
         raise ProxmoxError(f"Failed to create VM: {e}")
 
 
-def provision_from_request(*, session: Session, db_request) -> int:
-    """Provision a VM or LXC based on an approved request. Returns VMID."""
+def provision_from_request(*, session: Session, db_request) -> tuple[int, str | None, str | None]:
+    """Provision a VM or LXC based on an approved request."""
     new_vmid = proxmox_service.next_vmid()
     plain_password = decrypt_value(db_request.password)
-    target_node = (
-        _get_lxc_target_node()
-        if db_request.resource_type == "lxc"
-        else _get_vm_target_node(db_request.template_id)
+    start_immediately = should_start_now(db_request)
+    placement_request = vm_request_placement_service._to_placement_request(db_request)
+    placement_strategy = str(
+        db_request.placement_strategy_used or "priority_dominant_share"
     )
-    target_storage = proxmox_service.resolve_target_storage(
-        target_node,
-        db_request.storage,
-        required_content=(
-            "rootdir" if db_request.resource_type == "lxc" else "images"
-        ),
+    placement = _select_request_placement(
+        session=session,
+        db_request=db_request,
+        placement_request=placement_request,
+        placement_strategy=placement_strategy,
     )
+    if not placement.plan.feasible or not placement.node:
+        raise ProxmoxError(
+            f"No feasible placement is available for request {getattr(db_request, 'id', 'unknown')}"
+        )
+    placement_node = placement.node
+    placement_strategy = placement.strategy
+    target_node = placement_node
     resource_type = "lxc" if db_request.resource_type == "lxc" else "qemu"
     created = False
+    actual_node = target_node
 
     try:
         if db_request.resource_type == "lxc":
+            target_storage = _resolve_managed_storage(
+                session=session,
+                node=target_node,
+                resource_type="lxc",
+                requested_storage=db_request.storage,
+                disk_gb=int(db_request.rootfs_size or 8),
+                required_content="rootdir",
+            )
             config = {
                 "vmid": new_vmid,
                 "hostname": _to_punycode_hostname(db_request.hostname),
@@ -285,7 +433,7 @@ def provision_from_request(*, session: Session, db_request) -> int:
                 "password": plain_password,
                 "net0": "name=eth0,bridge=vmbr0,ip=dhcp,firewall=1",
                 "unprivileged": int(db_request.unprivileged),
-                "start": 1,
+                "start": int(start_immediately),
                 "pool": get_proxmox_settings().pool_name,
                 "features": "nesting=1",
             }
@@ -304,6 +452,17 @@ def provision_from_request(*, session: Session, db_request) -> int:
                 commit=False,
             )
         else:
+            template = proxmox_service.find_vm_template(db_request.template_id)
+            template_node = template["node"]
+            clone_target_node = target_node
+            target_storage = _resolve_managed_storage(
+                session=session,
+                node=clone_target_node,
+                resource_type="vm",
+                requested_storage=db_request.storage,
+                disk_gb=int(db_request.disk_size or 20),
+                required_content="images",
+            )
             clone_config = {
                 "newid": new_vmid,
                 "name": _to_punycode_hostname(db_request.hostname),
@@ -311,9 +470,41 @@ def provision_from_request(*, session: Session, db_request) -> int:
                 "storage": target_storage,
                 "pool": get_proxmox_settings().pool_name,
             }
-            proxmox_service.clone_vm(
-                target_node, db_request.template_id, **clone_config
-            )
+            if clone_target_node != template_node:
+                clone_config["target"] = clone_target_node
+            try:
+                proxmox_service.clone_vm(
+                    template_node,
+                    db_request.template_id,
+                    **clone_config,
+                )
+                actual_node = clone_target_node
+            except Exception:
+                if clone_target_node == template_node:
+                    raise
+                logger.warning(
+                    "Cross-node clone failed for request %s; falling back to template node %s",
+                    getattr(db_request, "id", "unknown"),
+                    template_node,
+                )
+                actual_node = template_node
+                fallback_storage = _resolve_managed_storage(
+                    session=session,
+                    node=actual_node,
+                    resource_type="vm",
+                    requested_storage=db_request.storage,
+                    disk_gb=int(db_request.disk_size or 20),
+                    required_content="images",
+                )
+                proxmox_service.clone_vm(
+                    template_node,
+                    db_request.template_id,
+                    newid=new_vmid,
+                    name=_to_punycode_hostname(db_request.hostname),
+                    full=1,
+                    storage=fallback_storage,
+                    pool=get_proxmox_settings().pool_name,
+                )
             created = True
 
             config_updates = {
@@ -325,16 +516,17 @@ def provision_from_request(*, session: Session, db_request) -> int:
                 "ciupgrade": 0,
             }
             proxmox_service.update_config(
-                target_node, new_vmid, "qemu", **config_updates
+                actual_node, new_vmid, "qemu", **config_updates
             )
 
             if db_request.disk_size:
                 proxmox_service.resize_disk(
-                    target_node, new_vmid, "qemu", "scsi0", f"{db_request.disk_size}G"
+                    actual_node, new_vmid, "qemu", "scsi0", f"{db_request.disk_size}G"
                 )
 
-            firewall_service.setup_default_rules(target_node, new_vmid, "qemu")
-            proxmox_service.control(target_node, new_vmid, "qemu", "start")
+            firewall_service.setup_default_rules(actual_node, new_vmid, "qemu")
+            if start_immediately:
+                proxmox_service.control(actual_node, new_vmid, "qemu", "start")
 
             resource_repo.create_resource(
                 session=session,
@@ -349,11 +541,11 @@ def provision_from_request(*, session: Session, db_request) -> int:
     except Exception:
         session.rollback()
         if created:
-            _cleanup_failed_resource(target_node, new_vmid, resource_type)
+            _cleanup_failed_resource(actual_node, new_vmid, resource_type)
         raise
 
     logger.info(f"Provisioned {db_request.resource_type} with VMID {new_vmid}")
-    return new_vmid
+    return new_vmid, actual_node, placement_strategy
 
 
 def get_lxc_templates() -> list[TemplateSchema]:

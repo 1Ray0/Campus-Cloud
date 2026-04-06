@@ -30,21 +30,38 @@ export function AppSidebar() {
   const { user: currentUser } = useAuth()
   const { t } = useTranslation("navigation")
 
-  const baseItems: Item[] = [
+  const overviewItems: Item[] = [
     { icon: Home, title: t("sidebar.dashboard"), path: "/" },
+  ]
+
+  const resourceItems: Item[] = [
     { icon: ServerCog, title: t("sidebar.myResources"), path: "/my-resources" },
     { icon: Shield, title: "防火牆", path: "/firewall" },
-    { icon: FileText, title: t("sidebar.applications"), path: "/applications" },
+  ]
+
+  const aiItems: Item[] = [
     { icon: Bot, title: "AI API", path: "/ai-api" },
   ]
 
+  const commonItems: Item[] = [
+    ...overviewItems,
+    ...resourceItems,
+    ...aiItems,
+  ]
+
+  const studentItems: Item[] = [
+    ...overviewItems,
+    ...resourceItems,
+    { icon: FileText, title: t("sidebar.applications"), path: "/applications" },
+    ...aiItems,
+  ]
+
   const adminItems: Item[] = [
-    { icon: Home, title: t("sidebar.dashboard"), path: "/" },
-    { icon: ServerCog, title: t("sidebar.myResources"), path: "/my-resources" },
-    { icon: Shield, title: "防火牆", path: "/firewall" },
+    ...overviewItems,
+    ...resourceItems,
     { icon: Monitor, title: t("sidebar.resources"), path: "/resources" },
     { icon: ClipboardCheck, title: t("sidebar.approvals"), path: "/approvals" },
-    { icon: Bot, title: "AI API", path: "/ai-api" },
+    ...aiItems,
     { icon: ClipboardCheck, title: "AI API 審核", path: "/ai-api-approvals" },
     { icon: UsersRound, title: "群組管理", path: "/groups" },
     { icon: Users, title: t("sidebar.admin"), path: "/admin" },
@@ -53,9 +70,11 @@ export function AppSidebar() {
   ]
 
   const items =
-    currentUser?.role === "admin" || currentUser?.is_superuser
+    currentUser?.role === "student"
+      ? studentItems
+      : currentUser?.role === "admin" || currentUser?.is_superuser
       ? adminItems
-      : baseItems
+      : commonItems
 
   return (
     <Sidebar collapsible="icon">

@@ -31,6 +31,7 @@ from app.ai.pve_advisor.schemas import (
     ResourceType,
 )
 from app.models import AuditAction, AuditLog, VMRequest, VMRequestStatus
+from app.repositories import proxmox_config as proxmox_config_repo
 from app.services import proxmox_service
 
 GIB = 1024**3
@@ -129,9 +130,21 @@ async def generate_recommendation(
     request: PlacementRequest,
 ) -> PlacementAdvisorResponse:
     nodes, resources = _load_cluster_state()
+    config = proxmox_config_repo.get_proxmox_config(session)
+    cpu_overcommit_ratio = (
+        float(config.cpu_overcommit_ratio) if config else 1.0
+    )
+    disk_overcommit_ratio = (
+        float(config.disk_overcommit_ratio) if config else 1.0
+    )
     backend_traffic = _load_backend_traffic_snapshot(session=session)
     audit_signals = _load_audit_signal_snapshot(session=session)
-    node_capacities = _build_node_capacities(nodes=nodes, resources=resources)
+    node_capacities = _build_node_capacities(
+        nodes=nodes,
+        resources=resources,
+        cpu_overcommit_ratio=cpu_overcommit_ratio,
+        disk_overcommit_ratio=disk_overcommit_ratio,
+    )
     default_resource_type, default_reason = _decide_resource_type(request)
     rule_based_plan = _build_rule_based_plan(
         request=request,
@@ -429,6 +442,12 @@ def _load_cluster_state() -> tuple[list[NodeSnapshot], list[ResourceSnapshot]]:
             maxdisk_bytes=int(item.get("maxdisk") or 0),
             uptime=_optional_int(item.get("uptime")),
             gpu_count=gpu_map.get(str(item.get("node") or "unknown"), 0),
+            current_loadavg_1=_parse_loadavg_1(item.get("loadavg")),
+            average_loadavg_1=_parse_loadavg_1(
+                item.get("avg_load")
+                or item.get("avgload")
+                or item.get("average_loadavg")
+            ),
         )
         for item in proxmox_service.list_nodes()
     ]
@@ -523,6 +542,8 @@ def _build_node_capacities(
     *,
     nodes: list[NodeSnapshot],
     resources: list[ResourceSnapshot],
+    cpu_overcommit_ratio: float = 1.0,
+    disk_overcommit_ratio: float = 1.0,
 ) -> list[NodeCapacity]:
     running_counter = Counter(
         resource.node for resource in resources if resource.status == "running"
@@ -532,12 +553,18 @@ def _build_node_capacities(
         running_resources = running_counter.get(node.node, 0)
         guest_soft_limit = _guest_soft_limit(node.maxcpu)
         guest_pressure_ratio = _guest_pressure_ratio(running_resources, node.maxcpu)
-        raw_available_cpu = _raw_available_cpu(node)
+        used_cpu = max(float(node.maxcpu) * node.cpu_ratio, 0.0)
+        effective_total_cpu = max(float(node.maxcpu) * max(cpu_overcommit_ratio, 1.0), 0.0)
+        raw_available_cpu = max(effective_total_cpu - used_cpu, 0.0)
         raw_available_memory = _raw_available_bytes(node.mem_bytes, node.maxmem_bytes)
-        raw_available_disk = _raw_available_bytes(node.disk_bytes, node.maxdisk_bytes)
-        allocatable_cpu = _safe_available_float(raw_available_cpu, node.maxcpu)
+        effective_total_disk = max(
+            int(float(node.maxdisk_bytes) * max(disk_overcommit_ratio, 1.0)),
+            0,
+        )
+        raw_available_disk = max(effective_total_disk - node.disk_bytes, 0)
+        allocatable_cpu = _safe_available_float(raw_available_cpu, int(effective_total_cpu))
         allocatable_memory = _safe_available_int(raw_available_memory, node.maxmem_bytes)
-        allocatable_disk = _safe_available_int(raw_available_disk, node.maxdisk_bytes)
+        allocatable_disk = _safe_available_int(raw_available_disk, effective_total_disk)
         guest_overloaded = guest_pressure_ratio >= settings.guest_pressure_threshold
 
         capacities.append(
@@ -559,13 +586,15 @@ def _build_node_capacities(
                 cpu_ratio=node.cpu_ratio,
                 memory_ratio=_ratio(node.mem_bytes, node.maxmem_bytes),
                 disk_ratio=_ratio(node.disk_bytes, node.maxdisk_bytes),
-                total_cpu_cores=float(node.maxcpu),
+                total_cpu_cores=round(effective_total_cpu, 2),
                 allocatable_cpu_cores=allocatable_cpu,
-                total_memory_bytes=node.maxmem_bytes,
-                allocatable_memory_bytes=allocatable_memory,
-                total_disk_bytes=node.maxdisk_bytes,
-                allocatable_disk_bytes=allocatable_disk,
-            )
+            total_memory_bytes=node.maxmem_bytes,
+            allocatable_memory_bytes=allocatable_memory,
+            total_disk_bytes=effective_total_disk,
+            allocatable_disk_bytes=allocatable_disk,
+            current_loadavg_1=node.current_loadavg_1,
+            average_loadavg_1=node.average_loadavg_1,
+        )
         )
 
     return sorted(capacities, key=lambda item: item.node)
@@ -1020,3 +1049,26 @@ def _optional_int(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _parse_loadavg_1(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        parsed = float(value)
+        return parsed if parsed >= 0 else None
+    if isinstance(value, (list, tuple)) and value:
+        return _parse_loadavg_1(value[0])
+    text = str(value).strip()
+    if not text:
+        return None
+    separators = [",", " ", "/"]
+    for separator in separators:
+        if separator in text:
+            first = next((part for part in text.split(separator) if part.strip()), "")
+            return _parse_loadavg_1(first)
+    try:
+        parsed = float(text)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
