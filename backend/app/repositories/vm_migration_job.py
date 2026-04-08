@@ -309,7 +309,7 @@ def get_migration_stats(
     *,
     session: Session,
 ) -> dict:
-    from sqlalchemy import case, extract
+    from sqlalchemy import extract
 
     total = session.exec(
         select(sa_func.count()).select_from(VMMigrationJob)
