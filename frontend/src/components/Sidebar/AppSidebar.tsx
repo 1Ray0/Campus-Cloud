@@ -43,7 +43,7 @@ export function AppSidebar() {
 
   const aiItems: Item[] = [{ icon: Bot, title: "AI API", path: "/ai-api" }]
 
-  const commonItems: Item[] = [...overviewItems, ...resourceItems, ...aiItems]
+  const teacherItems: Item[] = [...overviewItems, ...resourceItems, ...aiItems]
 
   const studentItems: Item[] = [
     ...overviewItems,
@@ -71,12 +71,15 @@ export function AppSidebar() {
     { icon: ScrollText, title: "稽核日誌", path: "/admin/audit-logs" },
   ]
 
-  const items =
-    currentUser?.role === "student"
+  // currentUser 為 undefined 時（初次載入 / token refresh 中）不要 fallback 到
+  // 任何角色的選單，避免 admin 使用者在 refresh 期間被暫時降級成 teacher 選單。
+  const items: Item[] = !currentUser
+    ? []
+    : currentUser.role === "student"
       ? studentItems
-      : currentUser?.role === "admin" || currentUser?.is_superuser
+      : currentUser.role === "admin" || currentUser.is_superuser
         ? adminItems
-        : commonItems
+        : teacherItems
 
   return (
     <Sidebar collapsible="icon">
