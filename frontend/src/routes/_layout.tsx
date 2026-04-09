@@ -10,7 +10,6 @@ import AppSidebar from "@/components/Sidebar/AppSidebar"
 import {
   SidebarInset,
   SidebarProvider,
-  SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { isLoggedIn } from "@/hooks/useAuth"
 import { cn } from "@/lib/utils"
@@ -38,12 +37,9 @@ function Layout() {
 
   return (
     <div className="app-layout min-h-svh w-full">
-    <SidebarProvider>
+    <SidebarProvider defaultOpen={false}>
       <AppSidebar />
       <SidebarInset>
-        <header className="sticky top-0 z-10 flex h-16 shrink-0 items-center gap-2 px-4">
-          <SidebarTrigger className="-ml-1 text-muted-foreground" />
-        </header>
         {isFullscreen ? (
           <main className="flex-1 overflow-hidden">
             <Outlet />
@@ -56,7 +52,7 @@ function Layout() {
                 hasFixedFooter && "pb-28 md:pb-32",
               )}
             >
-              <div className="mx-auto max-w-7xl">
+              <div className="max-w-7xl">
                 <Outlet />
               </div>
             </main>
@@ -64,7 +60,7 @@ function Layout() {
               data-app-footer={hasFixedFooter ? "fixed" : undefined}
               className={
                 hasFixedFooter
-                  ? "sticky bottom-0 z-20 mt-auto bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80"
+                  ? "sticky bottom-0 z-20 mt-auto bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/80"
                   : undefined
               }
             />
