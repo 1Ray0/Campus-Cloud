@@ -7,10 +7,7 @@ import {
 
 import { Footer } from "@/components/Common/Footer"
 import AppSidebar from "@/components/Sidebar/AppSidebar"
-import {
-  SidebarInset,
-  SidebarProvider,
-} from "@/components/ui/sidebar"
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { isLoggedIn } from "@/hooks/useAuth"
 import { cn } from "@/lib/utils"
 
@@ -37,37 +34,37 @@ function Layout() {
 
   return (
     <div className="app-layout min-h-svh w-full">
-    <SidebarProvider defaultOpen={false}>
-      <AppSidebar />
-      <SidebarInset>
-        {isFullscreen ? (
-          <main className="flex-1 overflow-hidden">
-            <Outlet />
-          </main>
-        ) : (
-          <>
-            <main
-              className={cn(
-                "flex-1 p-6 md:p-8",
-                hasFixedFooter && "pb-28 md:pb-32",
-              )}
-            >
-              <div className="max-w-7xl">
-                <Outlet />
-              </div>
+      <SidebarProvider defaultOpen={false}>
+        <AppSidebar />
+        <SidebarInset>
+          {isFullscreen ? (
+            <main className="flex-1 overflow-hidden">
+              <Outlet />
             </main>
-            <Footer
-              data-app-footer={hasFixedFooter ? "fixed" : undefined}
-              className={
-                hasFixedFooter
-                  ? "sticky bottom-0 z-20 mt-auto bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/80"
-                  : undefined
-              }
-            />
-          </>
-        )}
-      </SidebarInset>
-    </SidebarProvider>
+          ) : (
+            <>
+              <main
+                className={cn(
+                  "flex-1 p-6 md:p-8",
+                  hasFixedFooter && "pb-28 md:pb-32",
+                )}
+              >
+                <div className="max-w-7xl">
+                  <Outlet />
+                </div>
+              </main>
+              <Footer
+                data-app-footer={hasFixedFooter ? "fixed" : undefined}
+                className={
+                  hasFixedFooter
+                    ? "sticky bottom-0 z-20 mt-auto bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/80"
+                    : undefined
+                }
+              />
+            </>
+          )}
+        </SidebarInset>
+      </SidebarProvider>
     </div>
   )
 }
