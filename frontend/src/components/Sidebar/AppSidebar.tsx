@@ -1,6 +1,8 @@
 import {
   ArrowRightLeft,
   Bot,
+  ChevronLeft,
+  ChevronRight,
   ClipboardCheck,
   FileText,
   Home,
@@ -33,7 +35,7 @@ import { User } from "./User"
 export function AppSidebar() {
   const { user: currentUser } = useAuth()
   const { t } = useTranslation("navigation")
-  const { setOpen } = useSidebar()
+  const { open, toggleSidebar } = useSidebar()
 
   const overviewItems: Item[] = [
     { icon: Home, title: t("sidebar.dashboard"), path: "/" },
@@ -89,9 +91,14 @@ export function AppSidebar() {
     <Sidebar
       collapsible="icon"
       variant="floating"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
     >
+      <button
+        onClick={toggleSidebar}
+        className="absolute -right-3 top-9 z-50 flex h-6 w-6 items-center justify-center rounded-full border border-border bg-background shadow-md hover:bg-accent transition-colors"
+        title={open ? "收合側邊欄" : "展開側邊欄"}
+      >
+        {open ? <ChevronLeft size={12} /> : <ChevronRight size={12} />}
+      </button>
       <SidebarHeader className="px-4 py-3.75 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:items-center">
         <Logo variant="responsive" />
       </SidebarHeader>
