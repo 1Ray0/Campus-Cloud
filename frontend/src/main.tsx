@@ -1,24 +1,20 @@
-import {
-  MutationCache,
-  QueryCache,
-  QueryClient,
-  QueryClientProvider,
-} from "@tanstack/react-query"
+import { QueryClientProvider } from "@tanstack/react-query"
 import { createRouter, RouterProvider } from "@tanstack/react-router"
 import { StrictMode } from "react"
 import ReactDOM from "react-dom/client"
-import { toast } from "sonner"
-import { ApiError, OpenAPI } from "./client"
+
+import { OpenAPI } from "./client"
 import { ThemeProvider } from "./components/theme-provider"
 import { Toaster } from "./components/ui/sonner"
 import "./index.css"
+import "./lib/i18n"
+import { queryClient } from "./lib/queryClient"
 import { LanguageProvider } from "./providers/LanguageProvider"
 import { routeTree } from "./routeTree.gen"
-import "./lib/i18n"
+import { AuthSessionService } from "./services/authSession"
 
 OpenAPI.BASE = import.meta.env.VITE_API_URL
 
-// 解析 JWT payload，取得 exp（秒）。失敗回 0 代表視為已過期。
 function getTokenExp(token: string): number {
   try {
     const payload = token.split(".")[1]
@@ -32,53 +28,36 @@ function getTokenExp(token: string): number {
   }
 }
 
-// Token 距離過期少於此秒數時就主動續期，避免打出去才吃到 401。
 const REFRESH_THRESHOLD_SEC = 30
 
 let refreshPromise: Promise<boolean> | null = null
 
 async function tryRefreshToken(): Promise<boolean> {
-  const refreshToken = localStorage.getItem("refresh_token")
-  if (!refreshToken) return false
-
-  // 同時間只允許一個 refresh 在飛，其他呼叫者共享同一個 promise。
   if (refreshPromise) return refreshPromise
 
   refreshPromise = (async () => {
     try {
-      const apiBase = import.meta.env.VITE_API_URL ?? ""
-      const response = await fetch(`${apiBase}/api/v1/login/refresh-token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      })
-      if (!response.ok) return false
-      const data = await response.json()
-      localStorage.setItem("access_token", data.access_token)
-      if (data.refresh_token) {
-        localStorage.setItem("refresh_token", data.refresh_token)
-      }
-      return true
-    } catch {
-      return false
+      return await AuthSessionService.refreshAccessToken()
     } finally {
       refreshPromise = null
     }
   })()
+
   return refreshPromise
 }
 
-// 主動式 token 取得：每次請求前檢查 exp，快過期就先換。
-// 這能把絕大多數 401 在發生前就擋掉，避免 retry 退避造成長時間卡頓。
 OpenAPI.TOKEN = async () => {
-  const token = localStorage.getItem("access_token")
+  const token = AuthSessionService.getAccessToken()
   if (!token) return ""
+
   const exp = getTokenExp(token)
   const nowSec = Math.floor(Date.now() / 1000)
+
   if (exp > 0 && exp - nowSec <= REFRESH_THRESHOLD_SEC) {
     const ok = await tryRefreshToken()
-    if (ok) return localStorage.getItem("access_token") || ""
+    if (ok) return AuthSessionService.getAccessToken() || ""
   }
+
   return token
 }
 
@@ -134,6 +113,7 @@ const queryClient = new QueryClient({
 })
 
 const router = createRouter({ routeTree })
+
 declare module "@tanstack/react-router" {
   interface Register {
     router: typeof router

@@ -37,7 +37,9 @@ function UserInfo({ avatarUrl, fullName, email }: UserInfoProps) {
         fullName={fullName}
       />
       <div className="flex flex-col items-start min-w-0">
-        <p className="text-sm font-medium truncate w-full sidebar-user-text">{displayName}</p>
+        <p className="text-sm font-medium truncate w-full sidebar-user-text">
+          {displayName}
+        </p>
         <p className="text-xs truncate w-full sidebar-user-text">{email}</p>
       </div>
     </div>
