@@ -61,57 +61,6 @@ OpenAPI.TOKEN = async () => {
   return token
 }
 
-const handleApiError = async (error: Error) => {
-  if (error instanceof ApiError && error.status === 401) {
-    const refreshed = await tryRefreshToken()
-    if (refreshed) {
-      // Token 刷新成功：只重打目前處於 error 狀態的 active query，
-      // 避免 invalidateQueries() 全量刷新導致表單頁面等元件因 re-render 重置本地狀態。
-      await queryClient.refetchQueries({
-        type: "active",
-        predicate: (query) => query.state.status === "error",
-      })
-    } else {
-      localStorage.removeItem("access_token")
-      localStorage.removeItem("refresh_token")
-      toast.error("登入已過期，請重新登入")
-      window.location.href = "/login"
-    }
-  } else if (error instanceof ApiError && error.status === 403) {
-    // 403 代表已登入但無權限存取該資源，不應強制登出
-    const detail =
-      (error.body as { detail?: string } | undefined)?.detail ??
-      "您沒有權限執行此操作"
-    toast.error(detail)
-  }
-}
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      // 401/403 是授權問題，重試只會累積退避延遲（預設 retry=3，約等 7 秒）造成 UI 長時間卡住。
-      // 其他錯誤維持預設的 3 次重試行為。
-      retry: (failureCount, error) => {
-        if (
-          error instanceof ApiError &&
-          (error.status === 401 || error.status === 403)
-        ) {
-          return false
-        }
-        return failureCount < 3
-      },
-    },
-    mutations: {
-      retry: false,
-    },
-  },
-  queryCache: new QueryCache({
-    onError: handleApiError,
-  }),
-  mutationCache: new MutationCache({
-    onError: handleApiError,
-  }),
-})
-
 const router = createRouter({ routeTree })
 
 declare module "@tanstack/react-router" {
