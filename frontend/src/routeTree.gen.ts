@@ -16,6 +16,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as LayoutRouteImport } from './routes/_layout'
 import { Route as LayoutIndexRouteImport } from './routes/_layout/index'
 import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
+import { Route as LayoutReverseProxyRouteImport } from './routes/_layout/reverse-proxy'
 import { Route as LayoutResourcesCreateRouteImport } from './routes/_layout/resources-create'
 import { Route as LayoutResourcesRouteImport } from './routes/_layout/resources'
 import { Route as LayoutMyResourcesRouteImport } from './routes/_layout/my-resources'
@@ -70,6 +71,11 @@ const LayoutIndexRoute = LayoutIndexRouteImport.update({
 const LayoutSettingsRoute = LayoutSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => LayoutRoute,
+} as any)
+const LayoutReverseProxyRoute = LayoutReverseProxyRouteImport.update({
+  id: '/reverse-proxy',
+  path: '/reverse-proxy',
   getParentRoute: () => LayoutRoute,
 } as any)
 const LayoutResourcesCreateRoute = LayoutResourcesCreateRouteImport.update({
@@ -200,6 +206,7 @@ export interface FileRoutesByFullPath {
   '/my-resources': typeof LayoutMyResourcesRoute
   '/resources': typeof LayoutResourcesRoute
   '/resources-create': typeof LayoutResourcesCreateRoute
+  '/reverse-proxy': typeof LayoutReverseProxyRoute
   '/settings': typeof LayoutSettingsRoute
   '/admin/audit-logs': typeof LayoutAdminAuditLogsRoute
   '/admin/configuration': typeof LayoutAdminConfigurationRoute
@@ -227,6 +234,7 @@ export interface FileRoutesByTo {
   '/my-resources': typeof LayoutMyResourcesRoute
   '/resources': typeof LayoutResourcesRoute
   '/resources-create': typeof LayoutResourcesCreateRoute
+  '/reverse-proxy': typeof LayoutReverseProxyRoute
   '/settings': typeof LayoutSettingsRoute
   '/': typeof LayoutIndexRoute
   '/admin/audit-logs': typeof LayoutAdminAuditLogsRoute
@@ -258,6 +266,7 @@ export interface FileRoutesById {
   '/_layout/my-resources': typeof LayoutMyResourcesRoute
   '/_layout/resources': typeof LayoutResourcesRoute
   '/_layout/resources-create': typeof LayoutResourcesCreateRoute
+  '/_layout/reverse-proxy': typeof LayoutReverseProxyRoute
   '/_layout/settings': typeof LayoutSettingsRoute
   '/_layout/': typeof LayoutIndexRoute
   '/_layout/admin/audit-logs': typeof LayoutAdminAuditLogsRoute
@@ -290,6 +299,7 @@ export interface FileRouteTypes {
     | '/my-resources'
     | '/resources'
     | '/resources-create'
+    | '/reverse-proxy'
     | '/settings'
     | '/admin/audit-logs'
     | '/admin/configuration'
@@ -317,6 +327,7 @@ export interface FileRouteTypes {
     | '/my-resources'
     | '/resources'
     | '/resources-create'
+    | '/reverse-proxy'
     | '/settings'
     | '/'
     | '/admin/audit-logs'
@@ -347,6 +358,7 @@ export interface FileRouteTypes {
     | '/_layout/my-resources'
     | '/_layout/resources'
     | '/_layout/resources-create'
+    | '/_layout/reverse-proxy'
     | '/_layout/settings'
     | '/_layout/'
     | '/_layout/admin/audit-logs'
@@ -417,6 +429,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof LayoutSettingsRouteImport
+      parentRoute: typeof LayoutRoute
+    }
+    '/_layout/reverse-proxy': {
+      id: '/_layout/reverse-proxy'
+      path: '/reverse-proxy'
+      fullPath: '/reverse-proxy'
+      preLoaderRoute: typeof LayoutReverseProxyRouteImport
       parentRoute: typeof LayoutRoute
     }
     '/_layout/resources-create': {
@@ -602,6 +621,7 @@ interface LayoutRouteChildren {
   LayoutMyResourcesRoute: typeof LayoutMyResourcesRoute
   LayoutResourcesRoute: typeof LayoutResourcesRoute
   LayoutResourcesCreateRoute: typeof LayoutResourcesCreateRoute
+  LayoutReverseProxyRoute: typeof LayoutReverseProxyRoute
   LayoutSettingsRoute: typeof LayoutSettingsRoute
   LayoutIndexRoute: typeof LayoutIndexRoute
   LayoutApprovalsRequestIdRoute: typeof LayoutApprovalsRequestIdRoute
@@ -623,6 +643,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutMyResourcesRoute: LayoutMyResourcesRoute,
   LayoutResourcesRoute: LayoutResourcesRoute,
   LayoutResourcesCreateRoute: LayoutResourcesCreateRoute,
+  LayoutReverseProxyRoute: LayoutReverseProxyRoute,
   LayoutSettingsRoute: LayoutSettingsRoute,
   LayoutIndexRoute: LayoutIndexRoute,
   LayoutApprovalsRequestIdRoute: LayoutApprovalsRequestIdRoute,

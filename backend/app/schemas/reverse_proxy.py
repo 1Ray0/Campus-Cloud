@@ -1,0 +1,35 @@
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class ReverseProxyRuleCreate(BaseModel):
+    vmid: int = Field(gt=0)
+    domain: str = Field(min_length=1, max_length=255)
+    internal_port: int = Field(ge=1, le=65535)
+    enable_https: bool = True
+
+
+class ReverseProxyRuntimeSection(BaseModel):
+    routers: list[dict[str, Any]] = Field(default_factory=list)
+    services: list[dict[str, Any]] = Field(default_factory=list)
+    middlewares: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ReverseProxyRuntimeSnapshot(BaseModel):
+    runtime_error: str | None = None
+    version: dict[str, Any] | None = None
+    overview: dict[str, Any] | None = None
+    entrypoints: list[dict[str, Any]] = Field(default_factory=list)
+    http: ReverseProxyRuntimeSection = Field(default_factory=ReverseProxyRuntimeSection)
+    tcp: ReverseProxyRuntimeSection = Field(default_factory=ReverseProxyRuntimeSection)
+    udp: ReverseProxyRuntimeSection = Field(default_factory=ReverseProxyRuntimeSection)
+
+
+__all__ = [
+    "ReverseProxyRuleCreate",
+    "ReverseProxyRuntimeSection",
+    "ReverseProxyRuntimeSnapshot",
+]

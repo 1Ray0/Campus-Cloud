@@ -105,6 +105,9 @@ class Settings(BaseSettings):
     PROXMOX_API_TIMEOUT: int = 30  # API request timeout in seconds
     PROXMOX_TASK_CHECK_INTERVAL: int = 1  # Seconds between task status checks
 
+    TRAEFIK_API_BASE_URL: str = "http://127.0.0.1:8080"
+    TRAEFIK_API_TIMEOUT: int = 10
+
     def _check_default_secret(self, var_name: str, value: str | None) -> None:
         if value == "changethis":
             message = (

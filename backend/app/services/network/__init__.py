@@ -9,6 +9,7 @@ __all__ = [
     "reverse_proxy_service",
     "script_deploy_service",
     "snapshot_service",
+    "traefik_runtime_service",
 ]
 
 _MODULES = {
@@ -18,6 +19,7 @@ _MODULES = {
     "reverse_proxy_service": "app.services.network.reverse_proxy_service",
     "script_deploy_service": "app.services.network.script_deploy_service",
     "snapshot_service": "app.services.network.snapshot_service",
+    "traefik_runtime_service": "app.services.network.traefik_runtime_service",
 }
 
 

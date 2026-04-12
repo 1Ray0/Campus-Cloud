@@ -5,6 +5,7 @@ import {
   ChevronRight,
   ClipboardCheck,
   FileText,
+  Globe,
   Home,
   KeyRound,
   Monitor,
@@ -44,6 +45,7 @@ export function AppSidebar() {
   const resourceItems: Item[] = [
     { icon: ServerCog, title: t("sidebar.myResources"), path: "/my-resources" },
     { icon: Shield, title: "防火牆", path: "/firewall" },
+    { icon: Globe, title: "反向代理", path: "/reverse-proxy" },
   ]
 
   const aiItems: Item[] = [{ icon: Bot, title: "AI API", path: "/ai-api" }]
@@ -93,6 +95,7 @@ export function AppSidebar() {
       variant="floating"
     >
       <button
+        type="button"
         onClick={toggleSidebar}
         className="absolute -right-3 top-9 z-50 flex h-6 w-6 items-center justify-center rounded-full border border-border bg-background shadow-md hover:bg-accent transition-colors"
         title={open ? "收合側邊欄" : "展開側邊欄"}

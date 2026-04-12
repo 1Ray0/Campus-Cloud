@@ -19,13 +19,56 @@ logger = logging.getLogger(__name__)
 # ─── Traefik dynamic config 產生 ───────────────────────────────────────────────
 
 
+def build_runtime_name(vmid: int, domain: str) -> str:
+    return f"cc-{vmid}-{domain.replace('.', '-')}"
+
+
+def resolve_vmid_ip(*, vmid: int, session: object | None = None) -> str | None:
+    """取得 VM 的 IP 位址，優先即時查詢，失敗時回退 DB 快取。"""
+    from app.repositories import resource as resource_repo  # noqa: PLC0415
+    from app.services.proxmox import proxmox_service  # noqa: PLC0415
+
+    ip: str | None = None
+    try:
+        resource = proxmox_service.find_resource(vmid)
+        node = resource["node"]
+        resource_type = resource["type"]
+        ip = proxmox_service.get_ip_address(node, vmid, resource_type)
+    except Exception:
+        pass
+
+    if ip and session is not None:
+        try:
+            resource_repo.update_ip_address(
+                session=session, vmid=vmid, ip_address=ip
+            )  # type: ignore[arg-type]
+        except Exception as exc:
+            logger.debug("VM %s IP 快取寫入失敗: %s", vmid, exc)
+        return ip
+
+    if ip:
+        return ip
+
+    if session is not None:
+        try:
+            cached = resource_repo.get_resource_by_vmid(  # type: ignore[arg-type]
+                session=session, vmid=vmid
+            )
+            if cached and cached.ip_address:
+                return cached.ip_address
+        except Exception as exc:
+            logger.debug("VM %s DB 快取讀取失敗: %s", vmid, exc)
+
+    return None
+
+
 def _build_traefik_dynamic_config(rules: list) -> str:
     """從 DB 規則列表產生 Traefik dynamic config YAML。"""
     routers: dict = {}
     services: dict = {}
 
     for r in rules:
-        safe_name = f"cc-{r.vmid}-{r.domain.replace('.', '-')}"
+        safe_name = build_runtime_name(r.vmid, r.domain)
 
         router: dict = {
             "rule": f"Host(`{r.domain}`)",
@@ -64,11 +107,15 @@ def _sync_traefik(session: object) -> None:
     """從 DB 重建 Traefik dynamic config 並寫入 Gateway VM。
     Traefik file provider 設定 watch: true，寫入即生效。
     """
+    from app.infrastructure.ssh import create_key_client, exec_command  # noqa: PLC0415
     from app.repositories import gateway_config as gw_repo  # noqa: PLC0415
     from app.repositories import reverse_proxy as rp_repo  # noqa: PLC0415
-    from app.repositories.gateway_config import get_decrypted_private_key  # noqa: PLC0415
-    from app.infrastructure.ssh import create_key_client, exec_command  # noqa: PLC0415
-    from app.services.network.gateway_service import TRAEFIK_DYNAMIC_PATH  # noqa: PLC0415
+    from app.repositories.gateway_config import (
+        get_decrypted_private_key,  # noqa: PLC0415
+    )
+    from app.services.network.gateway_service import (
+        TRAEFIK_DYNAMIC_PATH,  # noqa: PLC0415
+    )
 
     config = gw_repo.get_gateway_config(session)  # type: ignore[arg-type]
     if config is None or not config.host or not config.encrypted_private_key:
