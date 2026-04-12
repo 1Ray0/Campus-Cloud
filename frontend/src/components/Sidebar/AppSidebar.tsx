@@ -6,9 +6,9 @@ import {
   ClipboardCheck,
   FileText,
   Home,
+  KeyRound,
   Monitor,
   Network,
-  KeyRound,
   ScrollText,
   ServerCog,
   Settings2,
@@ -102,6 +102,9 @@ export function AppSidebar() {
       <SidebarHeader className="px-4 py-3.75 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:items-center">
         <Logo variant="responsive" />
       </SidebarHeader>
+      <hr
+        style={{ borderColor: "rgba(13, 66, 195, 0.5)", margin: "0 8px 10px" }}
+      />
       <SidebarContent>
         <Main items={items} />
       </SidebarContent>
