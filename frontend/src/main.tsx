@@ -86,9 +86,12 @@ const handleApiError = async (error: Error) => {
   if (error instanceof ApiError && error.status === 401) {
     const refreshed = await tryRefreshToken()
     if (refreshed) {
-      // Token 刷新成功：重打所有失敗/快取的 query，否則 currentUser 等
-      // 會停留在 undefined，導致 sidebar 等依賴使用者資訊的 UI 退化成未登入狀態。
-      await queryClient.invalidateQueries()
+      // Token 刷新成功：只重打目前處於 error 狀態的 active query，
+      // 避免 invalidateQueries() 全量刷新導致表單頁面等元件因 re-render 重置本地狀態。
+      await queryClient.refetchQueries({
+        type: "active",
+        predicate: (query) => query.state.status === "error",
+      })
     } else {
       localStorage.removeItem("access_token")
       localStorage.removeItem("refresh_token")
