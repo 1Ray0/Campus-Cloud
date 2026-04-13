@@ -11,7 +11,10 @@ import {
   CheckCircle2,
   Circle,
   Loader2,
+  Monitor,
   Plus,
+  Power,
+  PowerOff,
   ServerCog,
   Upload,
   UserMinus,
@@ -127,6 +130,39 @@ function ProgressBar({ done, total }: { done: number; total: number }) {
         style={{ width: `${pct}%` }}
       />
     </div>
+  )
+}
+
+function VmStatusBadge({ vmid, status }: { vmid?: number | null; status?: string | null }) {
+  if (!vmid) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+        <XCircle className="h-3.5 w-3.5" />
+        未建立
+      </span>
+    )
+  }
+  if (status === "running") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-green-600">
+        <Power className="h-3.5 w-3.5" />
+        運行中
+      </span>
+    )
+  }
+  if (status === "stopped") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+        <PowerOff className="h-3.5 w-3.5" />
+        已關機
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-xs text-yellow-600">
+      <Monitor className="h-3.5 w-3.5" />
+      {status ?? "未知"}
+    </span>
   )
 }
 
@@ -884,6 +920,8 @@ function GroupDetailContent({ groupId }: { groupId: string }) {
               <TableRow>
                 <TableHead>姓名</TableHead>
                 <TableHead>Email</TableHead>
+                <TableHead>VMID</TableHead>
+                <TableHead>VM 狀態</TableHead>
                 <TableHead>加入時間</TableHead>
                 <TableHead className="w-12" />
               </TableRow>
@@ -893,6 +931,14 @@ function GroupDetailContent({ groupId }: { groupId: string }) {
                 <TableRow key={member.user_id}>
                   <TableCell>{member.full_name ?? "-"}</TableCell>
                   <TableCell>{member.email}</TableCell>
+                  <TableCell className="font-mono text-sm">
+                    {member.vmid ?? (
+                      <span className="text-muted-foreground">-</span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <VmStatusBadge vmid={member.vmid} status={member.vm_status} />
+                  </TableCell>
                   <TableCell className="text-xs text-muted-foreground">
                     {member.added_at
                       ? new Date(member.added_at).toLocaleDateString("zh-TW")
