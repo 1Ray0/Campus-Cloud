@@ -1,16 +1,20 @@
-import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
+import {
+  useMutation,
+  useQueryClient,
+  useSuspenseQuery,
+} from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
 import { FileText } from "lucide-react"
 import { Suspense, useMemo } from "react"
 import { useTranslation } from "react-i18next"
 
-import { type ApiError, type VMRequestPublic } from "@/client"
+import type { ApiError, VMRequestPublic } from "@/client"
 import CreateVMRequest from "@/components/Applications/CreateVMRequest"
 import { createMyRequestColumns } from "@/components/Applications/columns"
 import { DataTable } from "@/components/Common/DataTable"
 import PendingItems from "@/components/Pending/PendingItems"
 import { myVmRequestsQueryOptions } from "@/features/applications/queryOptions"
-import { requireStudentUser } from "@/features/auth/guards"
+import { requireApplicationUser } from "@/features/auth/guards"
 import useCustomToast from "@/hooks/useCustomToast"
 import { queryKeys } from "@/lib/queryKeys"
 import { VmRequestsApi } from "@/services/vmRequests"
@@ -18,7 +22,7 @@ import { handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/applications")({
   component: Applications,
-  beforeLoad: () => requireStudentUser(),
+  beforeLoad: () => requireApplicationUser(),
   head: () => ({
     meta: [
       {
@@ -38,7 +42,9 @@ function RequestsTableContent() {
     onSuccess: () => {
       showSuccessToast(t("applications:actions.cancelSuccess"))
       queryClient.invalidateQueries({ queryKey: queryKeys.vmRequests.all })
-      queryClient.invalidateQueries({ queryKey: queryKeys.vmRequests.pendingCount })
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.vmRequests.pendingCount,
+      })
       queryClient.invalidateQueries({ queryKey: queryKeys.vmRequests.admin })
     },
     onError: (err) => handleError.call(showErrorToast, err as ApiError),

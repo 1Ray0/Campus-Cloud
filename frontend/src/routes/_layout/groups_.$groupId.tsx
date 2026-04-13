@@ -52,7 +52,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { requireAdminUser } from "@/features/auth/guards"
+import { requireGroupManagerUser } from "@/features/auth/guards"
 import { GroupFeatureService } from "@/features/groups/api"
 import { groupDetailQueryOptions } from "@/features/groups/queryOptions"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -100,7 +100,7 @@ type BatchJob = {
 
 export const Route = createFileRoute("/_layout/groups_/$groupId")({
   component: GroupDetailPage,
-  beforeLoad: () => requireAdminUser(),
+  beforeLoad: () => requireGroupManagerUser(),
   head: () => ({
     meta: [{ title: "群組詳情 - Campus Cloud" }],
   }),
