@@ -42,6 +42,21 @@ def _check_group_access(current_user, db_group) -> None:
     require_group_access(current_user, db_group.owner_id)
 
 
+def _safe_usage_pct(used: object, total: object) -> float | None:
+    """將 used/total 轉成 0~100 的百分比，無法計算時回傳 None。"""
+    try:
+        used_value = float(used)
+        total_value = float(total)
+    except (TypeError, ValueError):
+        return None
+
+    if total_value <= 0:
+        return None
+
+    pct = max(0.0, min((used_value / total_value) * 100, 100.0))
+    return round(pct, 1)
+
+
 @router.post("/", response_model=GroupPublic)
 def create_group(
     group_in: GroupCreate,
@@ -115,14 +130,33 @@ def get_group(
     # 批量取得所有 VM 的即時狀態與類型（一次 Proxmox API 呼叫）
     vm_status_map: dict[int, str] = {}
     vm_type_map: dict[int, str] = {}
+    vm_cpu_usage_map: dict[int, float | None] = {}
+    vm_ram_usage_map: dict[int, float | None] = {}
+    vm_disk_usage_map: dict[int, float | None] = {}
     vmids_to_check = [v for v in member_vmids.values() if v is not None]
     if vmids_to_check:
         try:
+            vmid_set = set(vmids_to_check)
             all_resources = proxmox_ops.list_all_resources()
             for r in all_resources:
-                if r["vmid"] in vmids_to_check:
-                    vm_status_map[r["vmid"]] = r.get("status", "unknown")
-                    vm_type_map[r["vmid"]] = r.get("type", "unknown")
+                raw_vmid = r.get("vmid")
+                try:
+                    vmid = int(raw_vmid)
+                except (TypeError, ValueError):
+                    continue
+
+                if vmid not in vmid_set:
+                    continue
+
+                vm_status_map[vmid] = r.get("status", "unknown")
+                vm_type_map[vmid] = r.get("type", "unknown")
+                vm_cpu_usage_map[vmid] = _safe_usage_pct(r.get("cpu"), 1)
+                vm_ram_usage_map[vmid] = _safe_usage_pct(
+                    r.get("mem"), r.get("maxmem")
+                )
+                vm_disk_usage_map[vmid] = _safe_usage_pct(
+                    r.get("disk"), r.get("maxdisk")
+                )
         except Exception:
             logger.warning("無法取得 Proxmox 資源狀態，將略過 VM 狀態欄位")
 
@@ -137,6 +171,15 @@ def get_group(
             if u.id in member_vmids
             else None,
             vm_type=vm_type_map.get(member_vmids[u.id])
+            if u.id in member_vmids
+            else None,
+            vm_cpu_usage_pct=vm_cpu_usage_map.get(member_vmids[u.id])
+            if u.id in member_vmids
+            else None,
+            vm_ram_usage_pct=vm_ram_usage_map.get(member_vmids[u.id])
+            if u.id in member_vmids
+            else None,
+            vm_disk_usage_pct=vm_disk_usage_map.get(member_vmids[u.id])
             if u.id in member_vmids
             else None,
         )
