@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -22,6 +23,10 @@ type PollResponse struct {
 	AccessToken string `json:"access_token"` // set when status == "approved"
 }
 
+// httpClient is a shared client with a sane timeout so a hung backend
+// doesn't stall the login flow indefinitely.
+var httpClient = &http.Client{Timeout: 15 * time.Second}
+
 // LoginWithDeviceCode performs the device authorization flow:
 //  1. Request a device code from the backend
 //  2. Open the login page in the browser with the device code
@@ -30,7 +35,19 @@ type PollResponse struct {
 // Returns the access token on success.
 func LoginWithDeviceCode(backendURL string) (string, error) {
 	// Step 1: Request device code
-	resp, err := http.Post(backendURL+"/api/v1/desktop-client/auth/device-code", "application/json", nil)
+	reqCtx, reqCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer reqCancel()
+	req, err := http.NewRequestWithContext(
+		reqCtx, "POST",
+		backendURL+"/api/v1/desktop-client/auth/device-code",
+		bytes.NewReader(nil),
+	)
+	if err != nil {
+		return "", fmt.Errorf("build device code request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("request device code: %w", err)
 	}
@@ -61,7 +78,7 @@ func LoginWithDeviceCode(backendURL string) (string, error) {
 		case <-ctx.Done():
 			return "", fmt.Errorf("login timed out")
 		case <-ticker.C:
-			token, done, err := pollDeviceCode(backendURL, dcResp.DeviceCode)
+			token, done, err := pollDeviceCode(ctx, backendURL, dcResp.DeviceCode)
 			if err != nil {
 				return "", err
 			}
@@ -72,8 +89,17 @@ func LoginWithDeviceCode(backendURL string) (string, error) {
 	}
 }
 
-func pollDeviceCode(backendURL, code string) (token string, done bool, err error) {
-	resp, err := http.Get(backendURL + "/api/v1/desktop-client/auth/poll?code=" + code)
+func pollDeviceCode(ctx context.Context, backendURL, code string) (token string, done bool, err error) {
+	req, err := http.NewRequestWithContext(
+		ctx, "GET",
+		backendURL+"/api/v1/desktop-client/auth/poll?code="+code,
+		nil,
+	)
+	if err != nil {
+		return "", false, fmt.Errorf("build poll request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", false, fmt.Errorf("poll: %w", err)
 	}

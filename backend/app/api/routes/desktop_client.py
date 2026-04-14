@@ -135,7 +135,7 @@ def download_desktop_client(session: SessionDep, current_user: CurrentUser):
         raise HTTPException(status_code=404, detail="Desktop client executable not found")
 
     config_data = {
-        "backend_url": str(settings.FRONTEND_HOST).rstrip("/").replace(":5173", ":8000"),
+        "backend_url": str(settings.DESKTOP_CLIENT_BACKEND_URL).rstrip("/"),
     }
 
     buf = io.BytesIO()

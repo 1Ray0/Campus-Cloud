@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"runtime"
 	"syscall"
+	"time"
 
 	"campus-cloud-connect/internal/api"
 	"campus-cloud-connect/internal/auth"
@@ -25,10 +26,20 @@ import (
 var webFS embed.FS
 
 var (
-	cfg       *config.Config
-	apiClient *api.Client
-	tunnelMgr *tunnel.Manager
+	cfg        *config.Config
+	apiClient  *api.Client
+	tunnelMgr  *tunnel.Manager
+	shutdownCh = make(chan struct{}, 1)
 )
+
+// triggerShutdown signals the main goroutine to shut down. Safe to call multiple times.
+func triggerShutdown() {
+	select {
+	case shutdownCh <- struct{}{}:
+	default:
+		// already triggered
+	}
+}
 
 func main() {
 	var err error
@@ -72,15 +83,20 @@ func main() {
 	// Open browser
 	openBrowser(url)
 
-	// Handle graceful shutdown
+	// Handle graceful shutdown — OS signals and /api/shutdown both feed shutdownCh
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	srv := &http.Server{Handler: mux}
 	go func() {
-		<-sigCh
+		select {
+		case <-sigCh:
+		case <-shutdownCh:
+		}
 		tunnelMgr.Stop()
-		_ = srv.Shutdown(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
 	}()
 
 	if err := srv.Serve(listener); err != http.ErrServerClosed {
@@ -209,12 +225,7 @@ func handleShutdown(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "method not allowed", 405)
 		return
 	}
-	tunnelMgr.Stop()
 	jsonResponse(w, map[string]string{"status": "shutting_down"})
-	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh)
-		p, _ := os.FindProcess(os.Getpid())
-		_ = p.Signal(syscall.SIGTERM)
-	}()
+	// Trigger the same shutdown path as OS signals
+	triggerShutdown()
 }

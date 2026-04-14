@@ -7,23 +7,39 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
+	"time"
 )
 
 type Client struct {
 	BaseURL    string
 	HTTPClient *http.Client
+	mu         sync.RWMutex
 	token      string
 }
 
 func NewClient(baseURL string) *Client {
 	return &Client{
-		BaseURL:    baseURL,
-		HTTPClient: &http.Client{},
+		BaseURL: baseURL,
+		HTTPClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
 	}
 }
 
-func (c *Client) SetToken(token string) { c.token = token }
-func (c *Client) HasToken() bool        { return c.token != "" }
+func (c *Client) SetToken(token string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.token = token
+}
+
+func (c *Client) getToken() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.token
+}
+
+func (c *Client) HasToken() bool { return c.getToken() != "" }
 
 type Resource struct {
 	VMID            int    `json:"vmid"`
@@ -67,13 +83,13 @@ func (c *Client) LoginGoogle(ctx context.Context, idToken string) error {
 	if err := json.Unmarshal(data, &result); err != nil {
 		return err
 	}
-	c.token = result.AccessToken
+	c.SetToken(result.AccessToken)
 	return nil
 }
 
 func (c *Client) MyResources(ctx context.Context) ([]Resource, error) {
 	req, _ := http.NewRequestWithContext(ctx, "GET", c.BaseURL+"/api/v1/resources/my", nil)
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", "Bearer "+c.getToken())
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -92,7 +108,7 @@ func (c *Client) MyResources(ctx context.Context) ([]Resource, error) {
 
 func (c *Client) GetTunnelConfig(ctx context.Context) (*TunnelConfig, error) {
 	req, _ := http.NewRequestWithContext(ctx, "GET", c.BaseURL+"/api/v1/tunnel/my-config", nil)
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", "Bearer "+c.getToken())
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, err
