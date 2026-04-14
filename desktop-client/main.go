@@ -43,7 +43,10 @@ func main() {
 	mux := http.NewServeMux()
 
 	// Serve embedded web UI
-	webContent, _ := fs.Sub(webFS, "web")
+	webContent, err := fs.Sub(webFS, "web")
+	if err != nil {
+		log.Fatalf("載入內嵌 web UI 失敗: %v", err)
+	}
 	mux.Handle("/", http.FileServer(http.FS(webContent)))
 
 	// API endpoints for the browser UI

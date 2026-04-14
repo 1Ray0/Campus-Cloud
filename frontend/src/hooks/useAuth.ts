@@ -54,8 +54,13 @@ const useAuth = (options?: {
       queryKey: queryKeys.auth.currentUser,
     })
     if (options?.onLoginSuccess) {
-      const preventNavigate = await options.onLoginSuccess()
-      if (preventNavigate === true) return
+      try {
+        const preventNavigate = await options.onLoginSuccess()
+        if (preventNavigate === true) return
+      } catch (error) {
+        handleError.call(showErrorToast, error)
+        return
+      }
     }
     navigate({ to: "/" })
   }

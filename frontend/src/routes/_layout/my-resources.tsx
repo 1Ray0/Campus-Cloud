@@ -106,30 +106,51 @@ function RefreshButton() {
 }
 
 function DownloadDesktopClientButton() {
+  const [isDownloading, setIsDownloading] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
   const handleDownload = async () => {
-    const token =
-      typeof OpenAPI.TOKEN === "function"
-        ? await (OpenAPI.TOKEN as (options: object) => Promise<string>)({})
-        : (OpenAPI.TOKEN as string)
-    const resp = await fetch(
-      `${OpenAPI.BASE}/api/v1/desktop-client/download`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    )
-    if (!resp.ok) return
-    const blob = await resp.blob()
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = "campus-cloud-connect.zip"
-    a.click()
-    URL.revokeObjectURL(url)
+    setIsDownloading(true)
+    setErrorMessage(null)
+
+    try {
+      const token =
+        typeof OpenAPI.TOKEN === "function"
+          ? await (OpenAPI.TOKEN as (options: object) => Promise<string>)({})
+          : (OpenAPI.TOKEN as string)
+      const resp = await fetch(
+        `${OpenAPI.BASE}/api/v1/desktop-client/download`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      )
+      if (!resp.ok) {
+        throw new Error(`下載失敗（${resp.status} ${resp.statusText}）`)
+      }
+      const blob = await resp.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = "campus-cloud-connect.zip"
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "下載失敗，請稍後再試。",
+      )
+    } finally {
+      setIsDownloading(false)
+    }
   }
 
   return (
-    <Button variant="outline" onClick={handleDownload}>
-      <Download className="mr-2 h-4 w-4" />
-      下載連線工具
-    </Button>
+    <div className="flex flex-col gap-2">
+      <Button variant="outline" onClick={handleDownload} disabled={isDownloading}>
+        <Download className="mr-2 h-4 w-4" />
+        {isDownloading ? "下載中..." : "下載連線工具"}
+      </Button>
+      {errorMessage ? (
+        <p className="text-sm text-destructive">{errorMessage}</p>
+      ) : null}
+    </div>
   )
 }
 

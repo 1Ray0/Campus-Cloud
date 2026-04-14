@@ -134,13 +134,19 @@ function Login() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
           </div>
-          <h2 className="text-xl font-bold">授權成功</h2>
-          <p className="text-muted-foreground">桌面連線工具已授權，你可以關閉此頁面。</p>
+          <h2 className="text-xl font-bold">
+            {t("auth:deviceApprovalSuccess.title", { defaultValue: "授權成功" })}
+          </h2>
+          <p className="text-muted-foreground">
+            {t("auth:deviceApprovalSuccess.description", {
+              defaultValue: "桌面連線工具已授權，你可以關閉此頁面。",
+            })}
+          </p>
           <button
             className="mt-4 text-sm text-muted-foreground underline"
             onClick={() => navigate({ to: "/" })}
           >
-            前往主頁
+            {t("auth:deviceApprovalSuccess.goHome", { defaultValue: "前往主頁" })}
           </button>
         </div>
       </AuthLayout>

@@ -127,8 +127,7 @@ def sync_gateway_frpc(*, session: Session) -> None:
 
     all_proxies = tp_repo.get_all_proxies(session=session)
     if not all_proxies:
-        logger.info("No tunnel proxies in DB, skipping frpc sync")
-        return
+        logger.info("No tunnel proxies in DB; rewriting frpc managed block as empty")
 
     # Build vmid → IP mapping from resources table + Proxmox fallback
     vmids = list({p.vmid for p in all_proxies})
