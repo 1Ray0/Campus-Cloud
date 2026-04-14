@@ -39,7 +39,15 @@ def parse_docx(file_bytes: bytes) -> str:
 
 def parse_pdf(file_bytes: bytes) -> str:
     """用 pdfplumber 解析純文字型 PDF，表格轉為 Markdown，其餘為純文字（排除表格區域）。"""
-    import pdfplumber  # type: ignore
+    from fastapi import HTTPException
+
+    try:
+        import pdfplumber  # type: ignore
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="pdfplumber is required to parse PDF files. Please install pdfplumber.",
+        ) from exc
 
     lines: list[str] = []
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
