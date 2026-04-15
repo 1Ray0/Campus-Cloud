@@ -130,6 +130,6 @@ async def chat(
 ) -> ChatResponse:
     try:
         return await pve_chat(request.message)
-    except Exception as exc:
+    except Exception:
         logger.exception("AI-PVE 對話失敗")
-        raise HTTPException(status_code=500, detail=f"AI-PVE 對話失敗：{exc}")
+        raise HTTPException(status_code=500, detail="AI-PVE 對話失敗")
