@@ -93,12 +93,23 @@ def _build_resource_public(
         os_info=db_resource.os_info if db_resource else None,
         expiry_date=db_resource.expiry_date if db_resource else None,
         ip_address=ip_address,
+        ssh_public_key=db_resource.ssh_public_key if db_resource else None,
         cpu=resource.get("cpu"),
         maxcpu=resource.get("maxcpu"),
         mem=resource.get("mem"),
         maxmem=resource.get("maxmem"),
         uptime=resource.get("uptime"),
     )
+
+
+def get_by_vmid(
+    *, session: Session, vmid: int, resource_info: dict,
+) -> ResourcePublic:
+    """Get a single resource with merged Proxmox + DB data."""
+    vm_type = resource_info.get("type", "")
+    vm_node = resource_info.get("node", "")
+    db_resource = resource_repo.get_resource_by_vmid(session=session, vmid=vmid)
+    return _build_resource_public(resource_info, db_resource, vm_node, vm_type, session)
 
 
 def list_all(
