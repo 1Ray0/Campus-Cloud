@@ -78,7 +78,7 @@
 .brandText {
   font-weight: $font-weight-700;
   font-size: $font-size-16;
-  color: var(--color-text);
+  color: var(--color-text-primary);
   white-space: nowrap;
   flex: 1;
 }
@@ -410,7 +410,7 @@
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: var(--color-primary);
+  background: var(--color-text-primary);
   color: #fff;
   @include flex-center;
   flex-shrink: 0;
@@ -425,7 +425,7 @@
 .userName {
   font-size: $font-size-14;
   font-weight: $font-weight-500;
-  color: var(--color-text);
+  color: var(--color-text-primary);
   @include text-truncate;
 }
 

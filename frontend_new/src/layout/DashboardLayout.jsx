@@ -2,7 +2,7 @@ import { useState } from "react";
 import Sidebar from "../components/Sidebar/Sidebar";
 import styles from "./DashboardLayout.module.scss";
 
-export default function DashboardLayout({ children }) {
+export default function DashboardLayout({ children, activePage, onNavigate }) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -20,6 +20,8 @@ export default function DashboardLayout({ children }) {
         mobileOpen={mobileOpen}
         onToggle={() => setCollapsed((c) => !c)}
         onClose={() => setMobileOpen(false)}
+        activePage={activePage}
+        onNavigate={onNavigate}
       />
 
       <main className={styles.main}>

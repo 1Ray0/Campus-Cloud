@@ -1,9 +1,10 @@
 @use "../../../assets/styles/variables" as *;
 @use "../../../assets/styles/mixins" as *;
 
+/* ── Page shell ── */
 .page {
   @include flex-column;
-  gap: $spacing-24;
+  gap: $spacing-16;
   padding: $spacing-8 $spacing-16;
   flex: 1;
 
@@ -12,17 +13,16 @@
   }
 }
 
+/* ── Header ── */
 .pageHeader {
   @include flex-between;
   flex-wrap: wrap;
   gap: $spacing-16;
-  align-items: center;
 }
 
 .pageHeading {
   @include flex-column;
   gap: $spacing-4;
-  max-width: 560px;
 }
 
 .pageTitle {
@@ -38,31 +38,35 @@
 .pageSubtitle {
   font-size: $font-size-14;
   color: var(--color-text-secondary);
-  line-height: $line-height-base;
 }
 
-.btnSecondary {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px $spacing-16;
-  border-radius: $radius-8;
+/* ── Tabs ── */
+.tabs {
+  display: flex;
+  gap: $spacing-4;
+}
+
+.tab {
+  padding: 6px $spacing-16;
+  border-radius: $radius-pill;
   font-size: $font-size-14;
-  font-weight: $font-weight-500;
+  color: var(--color-text-secondary);
   cursor: pointer;
-  white-space: nowrap;
-  background: var(--color-surface);
-  color: var(--color-text);
-  border: 1px solid var(--color-border);
-  box-shadow: var(--shadow-sm);
-  flex-shrink: 0;
-  transition: background $transition-base;
+  transition: background $transition-base, color $transition-base;
 
   &:hover {
     background: var(--color-hover);
+    color: var(--color-text);
+  }
+
+  &.tabActive {
+    background: var(--color-text);
+    color: var(--color-surface);
+    font-weight: $font-weight-500;
   }
 }
 
+/* ── Content ── */
 .content {
   flex: 1;
   @include flex-column;
@@ -116,11 +120,6 @@
   border: 1px solid var(--color-border);
   border-radius: $radius-12;
   box-shadow: var(--shadow-sm);
-  transition: box-shadow $transition-base;
-
-  &:hover {
-    box-shadow: var(--shadow-md);
-  }
 }
 
 .rowIcon {
@@ -154,25 +153,31 @@
 
 .rowActions {
   display: flex;
-  gap: $spacing-4;
+  gap: $spacing-8;
   flex-shrink: 0;
 }
 
-.actionBtn {
-  width: 28px;
-  height: 28px;
+%review-btn {
+  padding: 6px $spacing-16;
   border-radius: $radius-8;
-  @include flex-center;
-  color: var(--color-text-secondary);
-  transition: background $transition-base, color $transition-base;
+  font-size: $font-size-14;
+  font-weight: $font-weight-500;
+  cursor: pointer;
+  transition: background $transition-base;
+}
 
-  &:hover {
-    background: var(--color-hover);
-    color: var(--color-text);
-  }
+.btnApprove {
+  @extend %review-btn;
+  background: color-mix(in srgb, #28a745 12%, transparent);
+  color: #28a745;
 
-  &.actionBtnDanger:hover {
-    background: color-mix(in srgb, #dc3545 10%, transparent);
-    color: #dc3545;
-  }
+  &:hover { background: color-mix(in srgb, #28a745 20%, transparent); }
+}
+
+.btnReject {
+  @extend %review-btn;
+  background: color-mix(in srgb, #dc3545 10%, transparent);
+  color: #dc3545;
+
+  &:hover { background: color-mix(in srgb, #dc3545 18%, transparent); }
 }

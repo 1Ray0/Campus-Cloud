@@ -19,12 +19,12 @@
 
   /* ----- Brand ----- */
   --color-primary: #5471bf;
-  --color-primary-dark: #324775;
+  --color-primary-dark: #2b4d98;
   --color-primary-light: #6a7fb3;
-  --color-accent-yellow: #f5c842;
 
   /* ----- Text ----- */
   --color-text: #5471bf;
+  --color-text-primary: #3a549d;
   --color-text-secondary: #617dc8;
   --color-text-muted: #8291aa;
   --color-text-on-primary: #ffffff;
@@ -34,7 +34,7 @@
   --color-divider: #eef2f9;
 
   /* ----- Interactive ----- */
-  --color-hover: #dee6f6;
+  --color-hover: #e8efff;
   --color-overlay: rgba(20, 30, 60, 0.25);
 
   /* ----- Status ----- */
@@ -70,10 +70,10 @@ body.dark {
   --color-primary: #4361a2;
   --color-primary-dark: rgb(47, 78, 140);
   --color-primary-light: #89a5e0;
-  --color-accent-yellow: #e8b93a;
 
   /* ----- Text ----- */
   --color-text: #d4deef;
+  --color-text-primary: #f0f4ff;
   --color-text-secondary: #8494b0;
   --color-text-muted: #5c6880;
   --color-text-on-primary: #ffffff;

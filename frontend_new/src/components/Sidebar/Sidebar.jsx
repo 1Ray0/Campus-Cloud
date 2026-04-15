@@ -203,8 +203,8 @@ const LANG_OPTIONS = [
   { key: "ja",    label: "日本語",   flag: "🇯🇵" },
 ];
 
-export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }) {
-  const [active, setActive] = useState("dashboard");
+export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose, activePage, onNavigate }) {
+  const [active, setActive] = useState(activePage ?? "dashboard");
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [langOpen, setLangOpen] = useState(false);
   const [userOpen, setUserOpen] = useState(false);
@@ -224,6 +224,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle, onClose }) {
 
   const handleNav = (key) => {
     setActive(key);
+    onNavigate?.(key);
     onClose?.();
   };
 
