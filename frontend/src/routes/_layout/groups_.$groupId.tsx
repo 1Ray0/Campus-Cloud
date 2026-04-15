@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   Circle,
   Loader2,
+  MessageSquare,
   Monitor,
   Plus,
   Power,
@@ -1037,6 +1038,12 @@ function GroupDetailContent({ groupId }: { groupId: string }) {
             <Button variant="outline" size="sm">
               <Brain className="mr-1 h-4 w-4" />
               AI 評分助手
+            </Button>
+          </Link>
+          <Link to="/groups/$groupId/ai-pve-message" params={{ groupId }}>
+            <Button variant="outline" size="sm">
+              <MessageSquare className="mr-1 h-4 w-4" />
+              AI-PVE 訊息
             </Button>
           </Link>
           <ImportCsvDialog groupId={groupId} />
