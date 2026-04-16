@@ -356,8 +356,9 @@ def create_vm(
             "sshkeys": quote(public_key, safe=""),
             "ciupgrade": 0,
         }
-        if vm_data.gpu_mapping_id:
-            config_updates["hostpci0"] = f"mapping={vm_data.gpu_mapping_id}"
+        gpu_mapping_id = getattr(vm_data, "gpu_mapping_id", None)
+        if gpu_mapping_id:
+            config_updates["hostpci0"] = f"mapping={gpu_mapping_id}"
         proxmox_service.update_config(target_node, new_vmid, "qemu", **config_updates)
 
         if vm_data.disk_size:
