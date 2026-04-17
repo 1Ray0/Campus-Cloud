@@ -1,5 +1,6 @@
 import {
   type ColumnDef,
+  type RowSelectionState,
   flexRender,
   getCoreRowModel,
   getPaginationRowModel,
@@ -33,18 +34,40 @@ interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[]
   data: TData[]
   onRowClick?: (row: TData) => void
+  enableRowSelection?: boolean
+  rowSelection?: RowSelectionState
+  onRowSelectionChange?: (selection: RowSelectionState) => void
+  getRowId?: (row: TData) => string
 }
 
 export function DataTable<TData, TValue>({
   columns,
   data,
   onRowClick,
+  enableRowSelection = false,
+  rowSelection,
+  onRowSelectionChange,
+  getRowId,
 }: DataTableProps<TData, TValue>) {
   const table = useReactTable({
     data,
     columns,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
+    enableRowSelection,
+    state: {
+      ...(rowSelection !== undefined ? { rowSelection } : {}),
+    },
+    onRowSelectionChange: onRowSelectionChange
+      ? (updater) => {
+          const next =
+            typeof updater === "function"
+              ? updater(rowSelection ?? {})
+              : updater
+          onRowSelectionChange(next)
+        }
+      : undefined,
+    getRowId,
   })
 
   return (

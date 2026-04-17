@@ -9,6 +9,7 @@ from app.exceptions import BadRequestError, ProxmoxError
 from app.models.vm_request import VMRequestStatus
 from app.repositories import vm_request as vm_request_repo
 from app.schemas import ResourcePublic
+from app.schemas.resource import BatchActionResponse, BatchActionResultItem
 from app.repositories import resource as resource_repo
 from app.repositories import audit_log as audit_log_repo
 from app.services.network import firewall_service
@@ -413,3 +414,77 @@ def direct_update_spec(
     except Exception as e:
         logger.error(f"Failed to update spec for {vmid}: {e}")
         raise ProxmoxError(f"Failed to update spec for resource {vmid}: {e}")
+
+
+def batch_action(
+    *,
+    session: Session,
+    vmids: list[int],
+    action: str,
+    user_id: uuid.UUID,
+    is_admin: bool,
+) -> BatchActionResponse:
+    """Batch control/delete for multiple resources."""
+    results: list[BatchActionResultItem] = []
+
+    for vmid in vmids:
+        try:
+            resource_info = proxmox_service.find_resource(vmid)
+
+            # Non-admin users must own the resource
+            if not is_admin:
+                db_resource = resource_repo.get_resource_by_vmid(
+                    session=session, vmid=vmid
+                )
+                if not db_resource or db_resource.user_id != user_id:
+                    results.append(
+                        BatchActionResultItem(
+                            vmid=vmid,
+                            success=False,
+                            message="Permission denied",
+                        )
+                    )
+                    continue
+
+            if action == "delete":
+                delete(
+                    session=session,
+                    vmid=vmid,
+                    resource_info=resource_info,
+                    user_id=user_id,
+                    purge=True,
+                    force=True,
+                )
+            else:
+                control(
+                    session=session,
+                    vmid=vmid,
+                    action=action,
+                    resource_info=resource_info,
+                    user_id=user_id,
+                )
+
+            results.append(
+                BatchActionResultItem(
+                    vmid=vmid,
+                    success=True,
+                    message=f"Resource {vmid} {action} succeeded",
+                )
+            )
+        except Exception as e:
+            logger.warning(f"Batch {action} failed for vmid={vmid}: {e}")
+            results.append(
+                BatchActionResultItem(
+                    vmid=vmid,
+                    success=False,
+                    message=str(e),
+                )
+            )
+
+    succeeded = sum(1 for r in results if r.success)
+    return BatchActionResponse(
+        total=len(results),
+        succeeded=succeeded,
+        failed=len(results) - succeeded,
+        results=results,
+    )

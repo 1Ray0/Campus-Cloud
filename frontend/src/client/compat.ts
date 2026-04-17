@@ -20,6 +20,19 @@ type ResourceOverview = ClientTypes.VmSchema & {
 
 const validationError = { 422: "Validation Error" } as const
 
+export type BatchActionResultItem = {
+  vmid: number
+  success: boolean
+  message: string
+}
+
+export type BatchActionResponse = {
+  total: number
+  succeeded: number
+  failed: number
+  results: BatchActionResultItem[]
+}
+
 export class AiTemplateRecommendationService {
   public static chat(data: { requestBody: ClientTypes.ChatRequest }) {
     return __request<ClientTypes.ChatResponse>(OpenAPI, {
@@ -423,6 +436,18 @@ export class ResourcesService {
       method: "GET",
       url: "/api/v1/resources/{vmid}/ssh-key",
       path: { vmid: data.vmid },
+      errors: validationError,
+    })
+  }
+
+  public static batchAction(data: {
+    requestBody: { vmids: number[]; action: string }
+  }) {
+    return __request<BatchActionResponse>(OpenAPI, {
+      method: "POST",
+      url: "/api/v1/resources/batch",
+      body: data.requestBody,
+      mediaType: "application/json",
       errors: validationError,
     })
   }

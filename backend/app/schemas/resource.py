@@ -287,3 +287,40 @@ class DirectSpecUpdateRequest(BaseModel):
         if self.cores is None and self.memory is None and self.disk_size is None:
             raise ValueError("At least one of cores, memory, or disk_size must be provided")
         return self
+
+
+# ===== Batch Operation Schemas =====
+
+
+class BatchActionRequest(BaseModel):
+    """批次操作請求"""
+
+    vmids: list[int] = Field(..., min_length=1, max_length=100, description="VM IDs to operate on")
+    action: str = Field(
+        ...,
+        description="Action: start, stop, shutdown, reboot, reset, delete",
+    )
+
+    @model_validator(mode="after")
+    def validate_action(self):
+        valid = {"start", "stop", "shutdown", "reboot", "reset", "delete"}
+        if self.action not in valid:
+            raise ValueError(f"Invalid action '{self.action}'. Must be one of: {', '.join(sorted(valid))}")
+        return self
+
+
+class BatchActionResultItem(BaseModel):
+    """單一 VM 的批次操作結果"""
+
+    vmid: int
+    success: bool
+    message: str
+
+
+class BatchActionResponse(BaseModel):
+    """批次操作回應"""
+
+    total: int
+    succeeded: int
+    failed: int
+    results: list[BatchActionResultItem]

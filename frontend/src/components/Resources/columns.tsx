@@ -4,6 +4,7 @@ import { Container, InfinityIcon, Monitor } from "lucide-react"
 
 import type { ResourcePublic } from "@/client"
 import { VMActions } from "@/components/Resources/VMActions"
+import { Checkbox } from "@/components/ui/checkbox"
 import { cn, decodeName } from "@/lib/utils"
 
 function StatusBadge({
@@ -59,7 +60,40 @@ function TypeLabel({
 export const createColumns = (
   t: TFunction<string, string>,
   onOpenConsole: (vmid: number, name: string, type: string) => void,
-): ColumnDef<ResourcePublic>[] => [
+  options?: { enableSelection?: boolean },
+): ColumnDef<ResourcePublic>[] => {
+  const cols: ColumnDef<ResourcePublic>[] = []
+
+  if (options?.enableSelection) {
+    cols.push({
+      id: "select",
+      header: ({ table }) => (
+        <Checkbox
+          checked={
+            table.getIsAllPageRowsSelected() ||
+            (table.getIsSomePageRowsSelected() && "indeterminate")
+          }
+          onCheckedChange={(value) =>
+            table.toggleAllPageRowsSelected(!!value)
+          }
+          aria-label="Select all"
+          onClick={(e) => e.stopPropagation()}
+        />
+      ),
+      cell: ({ row }) => (
+        <Checkbox
+          checked={row.getIsSelected()}
+          onCheckedChange={(value) => row.toggleSelected(!!value)}
+          aria-label="Select row"
+          onClick={(e) => e.stopPropagation()}
+        />
+      ),
+      enableSorting: false,
+      enableHiding: false,
+    })
+  }
+
+  cols.push(
   {
     accessorKey: "name",
     header: t("table.nameId"),
@@ -137,7 +171,10 @@ export const createColumns = (
       />
     ),
   },
-]
+  )
+
+  return cols
+}
 
 const noopT = ((key: string) => key) as TFunction
 

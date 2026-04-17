@@ -22,6 +22,7 @@ export {
 	VmRequestsService,
 	VmService,
 } from "./compat"
+export type { BatchActionResponse, BatchActionResultItem } from "./compat"
 
 export {
 	AiApiService,

@@ -52,6 +52,9 @@ from .cloudflare import (
 )
 from .common import Message, NewPassword, Token, TokenPayload
 from .resource import (
+    BatchActionRequest,
+    BatchActionResponse,
+    BatchActionResultItem,
     CurrentStatsResponse,
     DirectSpecUpdateRequest,
     LXCCreateRequest,
@@ -181,6 +184,10 @@ __all__ = [
     "UpdatePassword",
     "UserPublic",
     "UsersPublic",
+    # Batch Operations
+    "BatchActionRequest",
+    "BatchActionResponse",
+    "BatchActionResultItem",
     # Resource / Proxmox
     "NodeSchema",
     "VMSchema",
