@@ -6,11 +6,13 @@ from urllib.parse import quote
 
 from sqlmodel import Session
 
-from app.infrastructure.proxmox import get_proxmox_settings
-from app.infrastructure.ssh.client import generate_ed25519_keypair
+from app.ai.pve_advisor import recommendation_service as advisor_service
 from app.core.security import decrypt_value, encrypt_value
 from app.exceptions import ProxmoxError
-from app.services.network import ip_management_service
+from app.infrastructure.proxmox import get_proxmox_settings
+from app.infrastructure.ssh.client import generate_ed25519_keypair
+from app.repositories import resource as resource_repo
+from app.repositories import vm_request as vm_request_repo
 from app.schemas import (
     LXCCreateRequest,
     LXCCreateResponse,
@@ -19,14 +21,15 @@ from app.schemas import (
     VMCreateResponse,
     VMTemplateSchema,
 )
-from app.ai.pve_advisor import recommendation_service as advisor_service
-from app.repositories import resource as resource_repo
-from app.repositories import vm_request as vm_request_repo
-from app.services.network import firewall_service
-from app.services.network import tunnel_proxy_service
+from app.services.network import (
+    firewall_service,
+    ip_management_service,
+    tunnel_proxy_service,
+)
 from app.services.proxmox import gpu_service, proxmox_service
 from app.services.user import audit_service
 from app.services.vm import vm_request_placement_service
+from app.utils.hostname import to_punycode_hostname
 
 logger = logging.getLogger(__name__)
 
@@ -50,40 +53,6 @@ def should_start_now(db_request) -> bool:
     return start_at <= _utc_now()
 
 
-def to_punycode_hostname(hostname: str) -> str:
-    """將 Unicode hostname 轉換為 Punycode（ACE 格式）傳給 PVE。"""
-    if not isinstance(hostname, str):
-        logger.error(
-            "Expected str for hostname, got %s: %r", type(hostname).__name__, hostname
-        )
-        raise TypeError(f"hostname must be str, got {type(hostname).__name__!r}: {hostname!r}")
-
-    result_labels = []
-    for label in hostname.split("."):
-        if not label:
-            raise ValueError("Hostname labels must not be empty")
-        try:
-            label.encode("ascii")
-            ace = label  # 純 ASCII，無需轉換
-        except UnicodeEncodeError:
-            # 使用 punycode codec 編碼非 ASCII 字元
-            try:
-                ace = "xn--" + label.encode("punycode").decode("ascii")
-            except Exception as e:
-                raise ValueError(f"Cannot encode hostname label '{label}' to Punycode: {e}") from e
-
-        if len(ace) > 63:
-            raise ValueError(
-                f"Encoded hostname label '{label}' exceeds 63 characters after Punycode conversion"
-            )
-        result_labels.append(ace)
-
-    encoded_hostname = ".".join(result_labels)
-    if len(encoded_hostname) > 253:
-        raise ValueError(
-            "Encoded hostname exceeds 253 characters after Punycode conversion"
-        )
-    return encoded_hostname
 def _cleanup_failed_resource(node: str, vmid: int, resource_type: str) -> None:
     """Best-effort cleanup for a partially provisioned resource."""
     try:

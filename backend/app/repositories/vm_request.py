@@ -6,9 +6,9 @@ from sqlalchemy.orm import selectinload
 from sqlmodel import Session, func, select
 
 from app.models import VMMigrationStatus, VMRequest, VMRequestStatus
-from app.schemas import VMRequestCreate
 from app.repositories import resource as resource_repo
-from app.services.proxmox.provisioning_service import to_punycode_hostname
+from app.schemas import VMRequestCreate
+from app.utils.hostname import to_punycode_hostname
 
 
 def create_vm_request(
