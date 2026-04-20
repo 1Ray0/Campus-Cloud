@@ -75,7 +75,12 @@ async function approveDeviceCode(deviceCode: string): Promise<boolean> {
   try {
     const token =
       typeof OpenAPI.TOKEN === "function"
-        ? await (OpenAPI.TOKEN as (options: object) => Promise<string>)({})
+        ? await (
+            OpenAPI.TOKEN as (options: { method: string; url: string }) => Promise<string>
+          )({
+            method: "POST",
+            url: "/api/v1/desktop-client/auth/approve",
+          })
         : (OpenAPI.TOKEN as string)
     const resp = await fetch(
       `${OpenAPI.BASE}/api/v1/desktop-client/auth/approve`,

@@ -116,7 +116,15 @@ function DownloadDesktopClientButton() {
     try {
       const token =
         typeof OpenAPI.TOKEN === "function"
-          ? await (OpenAPI.TOKEN as (options: object) => Promise<string>)({})
+          ? await (
+              OpenAPI.TOKEN as (options: {
+                method: string
+                url: string
+              }) => Promise<string>
+            )({
+              method: "GET",
+              url: "/api/v1/desktop-client/download",
+            })
           : (OpenAPI.TOKEN as string)
       const resp = await fetch(
         `${OpenAPI.BASE}/api/v1/desktop-client/download`,
