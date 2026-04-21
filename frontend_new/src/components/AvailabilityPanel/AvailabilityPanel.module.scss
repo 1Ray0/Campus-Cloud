@@ -1,0 +1,263 @@
+@use "../../assets/styles/variables" as *;
+@use "../../assets/styles/mixins" as *;
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ── Header ── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-primary);
+}
+
+.title {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+/* ── Hint text ── */
+.hint {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.hintError {
+  color: var(--color-danger, #e53e3e);
+}
+
+/* ── Selected range summary bar ── */
+.summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  color: var(--color-primary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+/* ── Section (label + content) ── */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sectionLabel {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── Date pills ── */
+.datePills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.datePill {
+  padding: 5px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+
+  &:hover {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+  }
+}
+
+.datePillActive {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+
+  &:hover {
+    background: var(--color-primary);
+    color: #fff;
+  }
+}
+
+/* ── Slot grid ── */
+.slotGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 4px;
+}
+
+.slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: var(--color-surface-secondary, var(--color-surface));
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s, box-shadow 0.15s;
+  min-width: 0;
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+  }
+
+  &:not(:disabled):hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 6px rgba(0 0 0 / 0.12);
+  }
+}
+
+.slotTime {
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.slotLabel {
+  font-size: 0.625rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* ── Slot status colors ── */
+.slotAvailable {
+  background: color-mix(in srgb, #22c55e 15%, transparent);
+  border-color: color-mix(in srgb, #22c55e 35%, transparent);
+  color: #15803d;
+}
+
+.slotLimited {
+  background: color-mix(in srgb, #f59e0b 15%, transparent);
+  border-color: color-mix(in srgb, #f59e0b 35%, transparent);
+  color: #b45309;
+}
+
+.slotUnavailable {
+  background: color-mix(in srgb, #ef4444 12%, transparent);
+  border-color: color-mix(in srgb, #ef4444 25%, transparent);
+  color: #b91c1c;
+}
+
+.slotBlocked {
+  background: color-mix(in srgb, var(--color-text-secondary) 10%, transparent);
+  border-color: color-mix(in srgb, var(--color-text-secondary) 20%, transparent);
+  color: var(--color-text-secondary);
+}
+
+/* ── Range highlight ── */
+.slotInRange {
+  background: color-mix(in srgb, var(--color-primary) 20%, transparent);
+  border-color: color-mix(in srgb, var(--color-primary) 50%, transparent);
+  color: var(--color-primary);
+}
+
+.slotStart,
+.slotEnd {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+
+  .slotLabel {
+    color: rgba(255 255 255 / 0.9);
+  }
+}
+
+/* ── Skeleton loading ── */
+.skeletonWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.skeleton {
+  border-radius: 8px;
+  background: var(--color-surface-secondary, var(--color-surface));
+  animation: shimmer 1.4s ease-in-out infinite;
+  background-size: 400% 100%;
+  background-image: linear-gradient(
+    90deg,
+    var(--color-surface-secondary, var(--color-surface)) 0%,
+    color-mix(in srgb, var(--color-text-secondary) 8%, var(--color-surface)) 50%,
+    var(--color-surface-secondary, var(--color-surface)) 100%
+  );
+}
+
+.skeletonDates {
+  height: 32px;
+  width: 100%;
+}
+
+.skeletonGrid {
+  height: 140px;
+  width: 100%;
+}
+
+@keyframes shimmer {
+  0%   { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* ── Legend ── */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-top: 2px;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+.legendDot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+
+  &.slotAvailable {
+    background: color-mix(in srgb, #22c55e 25%, transparent);
+    border-color: color-mix(in srgb, #22c55e 50%, transparent);
+  }
+
+  &.slotLimited {
+    background: color-mix(in srgb, #f59e0b 25%, transparent);
+    border-color: color-mix(in srgb, #f59e0b 50%, transparent);
+  }
+
+  &.slotUnavailable {
+    background: color-mix(in srgb, #ef4444 20%, transparent);
+    border-color: color-mix(in srgb, #ef4444 40%, transparent);
+  }
+
+  &.slotBlocked {
+    background: color-mix(in srgb, var(--color-text-secondary) 15%, transparent);
+    border-color: color-mix(in srgb, var(--color-text-secondary) 30%, transparent);
+  }
+}

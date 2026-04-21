@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
 import styles from "./RequestsPage.module.scss";
-import { apiGet, apiPost } from "../../../services/api";
 import { useAuth } from "../../../contexts/AuthContext";
+import { useToast } from "../../../hooks/useToast";
+import { VmRequestsService } from "../../../services/vmRequests";
+import { GpuService } from "../../../services/gpu";
+import { apiGet } from "../../../services/api";
 import AiSidePanel from "./AiSidePanel";
 import FastTemplatesPanel from "../../../components/FastTemplatesPanel/FastTemplatesPanel";
+import AvailabilityPanel from "../../../components/AvailabilityPanel/AvailabilityPanel";
 
 const MIcon = ({ name, size = 20 }) => (
   <span className="material-icons-outlined" style={{ fontSize: size, lineHeight: 1 }}>
@@ -11,6 +15,7 @@ const MIcon = ({ name, size = 20 }) => (
   </span>
 );
 
+/* Hostname normalization — preserves alphanumeric, replaces others with hyphen */
 function normalizeHostname(value) {
   return String(value || "")
     .toLowerCase()
@@ -20,6 +25,7 @@ function normalizeHostname(value) {
     .slice(0, 63);
 }
 
+/* ── Form field primitives ── */
 function FieldGroup({ label, hint, required, error, children, labelRight }) {
   return (
     <div className={styles.formGroup}>
@@ -31,7 +37,7 @@ function FieldGroup({ label, hint, required, error, children, labelRight }) {
         {labelRight && <span className={styles.labelValue}>{labelRight}</span>}
       </label>
       {children}
-      {hint && <p className={styles.fieldHint}>{hint}</p>}
+      {hint  && <p className={styles.fieldHint}>{hint}</p>}
       {error && <p className={styles.fieldError}>{error}</p>}
     </div>
   );
@@ -51,12 +57,42 @@ function SelectField({ value, onChange, disabled, children, placeholder }) {
   );
 }
 
+/* ── Helpers ── */
+const DT_FMT = { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" };
+const formatDT = (iso) => new Date(iso).toLocaleString("zh-TW", DT_FMT);
+const formatOstemplate = (v) => v.split("/").pop()?.replace(".tar.zst", "") ?? v;
+const gpuLabel = (gpu) => {
+  const vram = gpu.total_vram_mb > 0
+    ? ` (${gpu.total_vram_mb >= 1024 ? `${(gpu.total_vram_mb / 1024).toFixed(0)} GB` : `${gpu.total_vram_mb} MB`})`
+    : gpu.vram ? ` (${gpu.vram})` : "";
+  return `${gpu.description || gpu.mapping_id}${vram} [${gpu.available_count}/${gpu.device_count} 可用]${gpu.available_count <= 0 ? " — 已滿" : ""}`;
+};
+
+/* ── Validation messages（對齊舊版 zh-TW locales）── */
+const MSG = {
+  hostnameRequired: "名稱為必填項",
+  hostnameInvalid:  "僅允許小寫字母、數字和連字符，且不能以連字符開頭或結尾",
+  passwordRequired: "密碼為必填項",
+  passwordMinLen:   "密碼至少需要 8 個字符",
+  reasonRequired:   "申請原因為必填項",
+  reasonMinLen:     "申請原因至少需要 10 個字符",
+  templateRequired: "範本為必填項",
+  osRequired:       "作業系統為必填項",
+  usernameRequired: "使用者名稱為必填項",
+  startRequired:    "請選擇開始時間",
+  endRequired:      "請選擇結束時間",
+  endBeforeStart:   "結束時間必須晚於開始時間",
+  endInPast:        "結束時間必須晚於現在",
+};
+
 export default function RequestFormPage({ onBack, className }) {
-  const { user } = useAuth();
+  const { user }  = useAuth();
+  const toast     = useToast();
   const isPrivileged = user?.is_superuser || user?.role === "admin" || user?.role === "teacher";
 
   const [closing, setClosing]   = useState(false);
   const [aiOpen, setAiOpen]     = useState(false);
+  const [rightTab, setRightTab] = useState("summary");
 
   /* Service template (LXC only) */
   const [serviceTemplateName, setServiceTemplateName] = useState("");
@@ -67,25 +103,24 @@ export default function RequestFormPage({ onBack, className }) {
   const [resourceType, setResourceType] = useState("lxc");
   const [mode, setMode]                 = useState("scheduled");
   const [form, setForm] = useState({
-    hostname: "",
-    ostemplate: "",
-    os_info: "",
-    password: "",
-    template_id: "",
-    username: "",
-    cores: 2,
-    memory: 2048,
-    rootfs_size: 8,
-    disk_size: 20,
-    gpu_mapping_id: "",
-    start_at: "",
-    end_at: "",
+    hostname:         "",
+    ostemplate:       "",
+    os_info:          "",
+    password:         "",
+    template_id:      "",
+    username:         "",
+    cores:            2,
+    memory:           2048,
+    rootfs_size:      8,
+    disk_size:        20,
+    gpu_mapping_id:   "",
+    start_at:         "",
+    end_at:           "",
     immediate_no_end: true,
-    reason: "",
+    reason:           "",
   });
-  const [errors, setErrors]         = useState({});
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState("");
+  const [errors, setErrors]           = useState({});
+  const [submitting, setSubmitting]   = useState(false);
 
   /* API data */
   const [lxcTemplates, setLxcTemplates] = useState([]);
@@ -95,7 +130,7 @@ export default function RequestFormPage({ onBack, className }) {
   const [gpuOptions, setGpuOptions]     = useState([]);
   const [gpuLoading, setGpuLoading]     = useState(false);
 
-  /* Fetch LXC templates */
+  /* ── API fetches ── */
   useEffect(() => {
     if (resourceType !== "lxc" || lxcTemplates.length > 0) return;
     setLxcLoading(true);
@@ -105,7 +140,6 @@ export default function RequestFormPage({ onBack, className }) {
       .finally(() => setLxcLoading(false));
   }, [resourceType]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* Fetch VM templates */
   useEffect(() => {
     if (resourceType !== "vm" || vmTemplates.length > 0) return;
     setVmLoading(true);
@@ -115,8 +149,9 @@ export default function RequestFormPage({ onBack, className }) {
       .finally(() => setVmLoading(false));
   }, [resourceType]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* Fetch GPU options (VM only, after window selected or immediate) */
-  const canLoadGpu = resourceType === "vm" && (mode === "immediate" || (form.start_at && form.end_at));
+  const canLoadGpu = resourceType === "vm" &&
+    (mode === "immediate" || (form.start_at && form.end_at));
+
   useEffect(() => {
     if (!canLoadGpu) {
       setGpuOptions([]);
@@ -125,14 +160,15 @@ export default function RequestFormPage({ onBack, className }) {
     }
     setGpuLoading(true);
     const params = mode === "immediate"
-      ? ""
-      : `?start_at=${encodeURIComponent(form.start_at)}&end_at=${encodeURIComponent(form.end_at)}`;
-    apiGet(`/api/v1/gpu/options${params}`)
+      ? undefined
+      : { startAt: form.start_at, endAt: form.end_at };
+    GpuService.listOptions(params)
       .then(setGpuOptions)
       .catch(() => setGpuOptions([]))
       .finally(() => setGpuLoading(false));
   }, [canLoadGpu, form.start_at, form.end_at, mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* ── Helpers ── */
   function set(key, val) {
     setForm((prev) => ({ ...prev, [key]: val }));
     if (errors[key]) setErrors((prev) => ({ ...prev, [key]: "" }));
@@ -143,67 +179,93 @@ export default function RequestFormPage({ onBack, className }) {
     setTimeout(onBack, 180);
   }
 
+  /* ── Validation ── */
   function validate() {
     const errs = {};
-    if (!form.hostname.trim()) errs.hostname = "Hostname 為必填";
-    else if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(form.hostname))
-      errs.hostname = "Hostname 只能包含小寫英數字與連字符，且不能以連字符開頭或結尾";
-    if (!form.password) errs.password = "密碼為必填（至少 8 個字元）";
-    else if (form.password.length < 8) errs.password = "密碼至少需要 8 個字元";
-    if (!form.reason.trim()) errs.reason = "申請原因為必填";
-    else if (form.reason.trim().length < 10) errs.reason = "申請原因至少需要 10 個字元";
-    if (resourceType === "lxc" && !form.ostemplate) errs.ostemplate = "請選擇作業系統範本";
+    const hostnameRegex = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
+
+    if (!form.hostname.trim())          errs.hostname = MSG.hostnameRequired;
+    else if (!hostnameRegex.test(form.hostname)) errs.hostname = MSG.hostnameInvalid;
+
+    if (!form.password)                 errs.password = MSG.passwordRequired;
+    else if (form.password.length < 8)  errs.password = MSG.passwordMinLen;
+
+    if (!form.reason.trim())            errs.reason = MSG.reasonRequired;
+    else if (form.reason.trim().length < 10) errs.reason = MSG.reasonMinLen;
+
+    if (resourceType === "lxc" && !form.ostemplate) errs.ostemplate = MSG.templateRequired;
     if (resourceType === "vm") {
-      if (!form.template_id) errs.template_id = "請選擇作業系統";
-      if (!form.username.trim()) errs.username = "使用者名稱為必填";
+      if (!form.template_id)            errs.template_id = MSG.osRequired;
+      if (!form.username.trim())        errs.username    = MSG.usernameRequired;
     }
+
     if (mode === "scheduled") {
-      if (!form.start_at) errs.start_at = "請選擇開始時間";
-      if (!form.end_at) errs.end_at = "請選擇結束時間";
+      if (!form.start_at) errs.start_at = MSG.startRequired;
+      if (!form.end_at)   errs.end_at   = MSG.endRequired;
       if (form.start_at && form.end_at && new Date(form.start_at) >= new Date(form.end_at))
-        errs.end_at = "結束時間必須晚於開始時間";
+        errs.end_at = MSG.endBeforeStart;
     }
     if (mode === "immediate" && !form.immediate_no_end && form.end_at) {
-      if (new Date(form.end_at) <= new Date()) errs.end_at = "結束時間必須晚於現在";
+      if (new Date(form.end_at) <= new Date()) errs.end_at = MSG.endInPast;
     }
     return errs;
   }
 
+  /* ── Submit ── */
   async function handleSubmit(e) {
     e.preventDefault();
-    setSubmitError("");
     const errs = validate();
     if (Object.keys(errs).length > 0) { setErrors(errs); return; }
 
     setSubmitting(true);
     try {
+      /* GPU re-availability check before submitting (mirrors old frontend logic) */
+      const selectedGpuId = form.gpu_mapping_id?.trim();
+      if (resourceType === "vm" && selectedGpuId) {
+        const params = mode === "scheduled"
+          ? { startAt: form.start_at || undefined, endAt: form.end_at || undefined }
+          : undefined;
+        const latestOptions = await GpuService.listOptions(params);
+        const gpuStillAvailable = latestOptions.some(
+          (g) => g.mapping_id === selectedGpuId && g.available_count > 0,
+        );
+        if (!gpuStillAvailable) {
+          toast.error("目前所選時段的 GPU 已不可用，請重新選擇時段或 GPU。");
+          setSubmitting(false);
+          return;
+        }
+      }
+
       const body = {
         resource_type: resourceType,
         mode,
-        hostname: form.hostname,
-        password: form.password,
-        cores: form.cores,
-        memory: form.memory,
-        os_info: form.os_info || undefined,
-        reason: form.reason.trim(),
-        storage: "local-lvm",
+        hostname:  form.hostname,
+        password:  form.password,
+        cores:     form.cores,
+        memory:    form.memory,
+        os_info:   form.os_info || undefined,
+        reason:    form.reason.trim(),
+        storage:   "local-lvm",
         ...(resourceType === "lxc"
           ? { ostemplate: form.ostemplate, rootfs_size: form.rootfs_size }
           : { template_id: Number(form.template_id), username: form.username, disk_size: form.disk_size }),
-        ...(form.gpu_mapping_id ? { gpu_mapping_id: form.gpu_mapping_id } : {}),
+        ...(selectedGpuId ? { gpu_mapping_id: selectedGpuId } : {}),
         ...(mode === "scheduled"
           ? { start_at: form.start_at, end_at: form.end_at }
           : (!form.immediate_no_end && form.end_at ? { end_at: form.end_at } : {})),
       };
-      await apiPost("/api/v1/vm-requests/", body);
+
+      await VmRequestsService.create(body);
+      toast.success("申請已提交，等待管理員審核");
       handleBack();
     } catch (err) {
-      setSubmitError(err?.message ?? "送出失敗，請稍後再試。");
+      toast.error(err?.message ?? "發生錯誤，請重試。");
     } finally {
       setSubmitting(false);
     }
   }
 
+  /* ── Service template selection ── */
   function handleSelectTemplate(template) {
     setServiceTemplateName(template.name || "");
     setServiceTemplateSlug(template.slug || "");
@@ -224,8 +286,8 @@ export default function RequestFormPage({ onBack, className }) {
       {/* ── 頁首 ── */}
       <div className={styles.formPageHeader}>
         <div className={styles.pageHeading}>
-          <h1 className={styles.pageTitle}>申請資源</h1>
-          <p className={styles.pageSubtitle}>填寫需求，或讓 AI 助手幫你決定規格</p>
+          <h1 className={styles.pageTitle}>申請虛擬機 / 容器</h1>
+          <p className={styles.pageSubtitle}>填寫申請表單後送出，待管理員審核通過後會自動建立資源</p>
         </div>
         <button type="button" className={styles.backBtn} onClick={handleBack}>
           <MIcon name="arrow_back" size={18} />
@@ -238,7 +300,7 @@ export default function RequestFormPage({ onBack, className }) {
         <div className={styles.formScroll}>
           <form id="request-form" onSubmit={handleSubmit} className={styles.form}>
 
-            {/* ── 模式切換（管理員／老師） ── */}
+            {/* ── 申請模式（管理員／老師） ── */}
             {isPrivileged && (
               <div className={styles.formSection}>
                 <h2 className={styles.sectionTitle}>申請模式</h2>
@@ -263,11 +325,11 @@ export default function RequestFormPage({ onBack, className }) {
 
             {/* ── 資源類型 ── */}
             <div className={styles.formSection}>
-              <h2 className={styles.sectionTitle}>資源類型</h2>
+              <h2 className={styles.sectionTitle}>類型</h2>
               <div className={styles.typeToggle}>
                 {[
-                  { key: "lxc", label: "LXC 容器", icon: "dashboard" },
-                  { key: "vm",  label: "虛擬機器", icon: "computer"  },
+                  { key: "lxc", label: "LXC 容器",   icon: "dashboard" },
+                  { key: "vm",  label: "QEMU 虛擬機", icon: "computer"  },
                 ].map((t) => (
                   <button
                     key={t.key}
@@ -282,12 +344,12 @@ export default function RequestFormPage({ onBack, className }) {
               </div>
             </div>
 
-            {/* ── LXC 欄位 ── */}
+            {/* ── LXC 設定 ── */}
             {resourceType === "lxc" && (
               <div className={styles.formSection}>
                 <h2 className={styles.sectionTitle}>容器設定</h2>
 
-                <FieldGroup label="Hostname" required error={errors.hostname}>
+                <FieldGroup label="容器名稱" required error={errors.hostname}>
                   <input
                     className={styles.input}
                     placeholder="project-alpha-web"
@@ -311,7 +373,7 @@ export default function RequestFormPage({ onBack, className }) {
                         type="button"
                         className={styles.templateClearBtn}
                         onClick={() => { setServiceTemplateName(""); setServiceTemplateSlug(""); }}
-                        title="移除模板"
+                        title="清除"
                       >
                         <MIcon name="close" size={16} />
                       </button>
@@ -323,31 +385,29 @@ export default function RequestFormPage({ onBack, className }) {
                       onClick={() => setShowTemplatePanel(true)}
                     >
                       <MIcon name="layers" size={16} />
-                      瀏覽服務模板
+                      選擇模板
                     </button>
                   )}
                 </FieldGroup>
 
-                <FieldGroup label="作業系統範本" required error={errors.ostemplate}
-                  hint="請從已上傳到節點的範本中選擇">
+                <FieldGroup label="作業系統映像檔" required error={errors.ostemplate}
+                  hint="請從已上傳到節點的映像檔中選擇">
                   <SelectField
                     value={form.ostemplate}
                     onChange={(v) => set("ostemplate", v)}
                     disabled={lxcLoading}
-                    placeholder={lxcLoading ? "載入中…" : "選擇範本"}
+                    placeholder={lxcLoading ? "載入中…" : "選擇映像檔"}
                   >
                     {lxcTemplates.map((t) => (
-                      <option key={t.volid} value={t.volid}>
-                        {t.volid.split("/").pop()?.replace(".tar.zst", "") ?? t.volid}
-                      </option>
+                      <option key={t.volid} value={t.volid}>{formatOstemplate(t.volid)}</option>
                     ))}
                     {!lxcLoading && lxcTemplates.length === 0 && (
-                      <option value="" disabled>目前沒有可用範本</option>
+                      <option value="" disabled>目前沒有可用映像檔</option>
                     )}
                   </SelectField>
                 </FieldGroup>
 
-                <FieldGroup label="OS 說明" hint="選填，例如：Ubuntu 22.04 LTS">
+                <FieldGroup label="作業系統資訊（選填）">
                   <input
                     className={styles.input}
                     placeholder="Ubuntu 22.04 LTS"
@@ -368,12 +428,12 @@ export default function RequestFormPage({ onBack, className }) {
               </div>
             )}
 
-            {/* ── VM 欄位 ── */}
+            {/* ── VM 設定 ── */}
             {resourceType === "vm" && (
               <div className={styles.formSection}>
                 <h2 className={styles.sectionTitle}>虛擬機設定</h2>
 
-                <FieldGroup label="VM 名稱" required error={errors.hostname}>
+                <FieldGroup label="虛擬機名稱" required error={errors.hostname}>
                   <input
                     className={styles.input}
                     placeholder="web-server-01"
@@ -399,7 +459,7 @@ export default function RequestFormPage({ onBack, className }) {
                   </SelectField>
                 </FieldGroup>
 
-                <FieldGroup label="OS 說明" hint="選填，例如：Ubuntu 22.04 LTS">
+                <FieldGroup label="作業系統資訊（選填）">
                   <input
                     className={styles.input}
                     placeholder="Ubuntu 22.04 LTS"
@@ -431,11 +491,11 @@ export default function RequestFormPage({ onBack, className }) {
               </div>
             )}
 
-            {/* ── 硬體規格 ── */}
+            {/* ── 硬體資源配置 ── */}
             <div className={styles.formSection}>
-              <h2 className={styles.sectionTitle}>硬體規格</h2>
+              <h2 className={styles.sectionTitle}>硬體資源配置</h2>
 
-              <FieldGroup label="CPU 核心數" labelRight={`${form.cores} 核`}>
+              <FieldGroup label="CPU 核心數" labelRight={`${form.cores} 核心`}>
                 <input
                   type="range" min={1} max={8} step={1}
                   className={styles.slider}
@@ -443,11 +503,13 @@ export default function RequestFormPage({ onBack, className }) {
                   onChange={(e) => set("cores", Number(e.target.value))}
                 />
                 <div className={styles.sliderTicks}>
-                  {[1, 2, 4, 8].map((v) => <span key={v}>{v}</span>)}
+                  {[1, 2, 4, 6, 8].map((v) => (
+                    <span key={v} style={{ left: `${(v - 1) / (8 - 1) * 100}%` }}>{v}</span>
+                  ))}
                 </div>
               </FieldGroup>
 
-              <FieldGroup label="記憶體" labelRight={`${(form.memory / 1024).toFixed(1)} GB`}>
+              <FieldGroup label="記憶體 (RAM)" labelRight={`${(form.memory / 1024).toFixed(1)} GB`}>
                 <input
                   type="range" min={512} max={32768} step={512}
                   className={styles.slider}
@@ -455,51 +517,37 @@ export default function RequestFormPage({ onBack, className }) {
                   onChange={(e) => set("memory", Number(e.target.value))}
                 />
                 <div className={styles.sliderTicks}>
-                  {["1GB", "8GB", "16GB", "32GB"].map((v) => <span key={v}>{v}</span>)}
+                  {[[1024,"1GB"],[8192,"8GB"],[16384,"16GB"],[24576,"24GB"],[32768,"32GB"]].map(([v, label]) => (
+                    <span key={label} style={{ left: `${(v - 512) / (32768 - 512) * 100}%` }}>{label}</span>
+                  ))}
                 </div>
               </FieldGroup>
 
-              {resourceType === "lxc" ? (
-                <FieldGroup label="磁碟空間（Rootfs）">
-                  <div className={styles.diskRow}>
-                    <input
-                      type="range" min={8} max={500} step={1}
-                      className={styles.slider}
-                      value={form.rootfs_size}
-                      onChange={(e) => set("rootfs_size", Number(e.target.value))}
-                    />
+              {(() => {
+                const isLxc   = resourceType === "lxc";
+                const diskKey = isLxc ? "rootfs_size" : "disk_size";
+                const diskMin = isLxc ? 8 : 20;
+                return (
+                  <FieldGroup label="硬碟空間 (Disk)" labelRight={
                     <div className={styles.diskInput}>
                       <input
-                        type="number" min={8} max={500}
+                        type="number" min={diskMin} max={500}
                         className={`${styles.input} ${styles.inputNumber}`}
-                        value={form.rootfs_size}
-                        onChange={(e) => set("rootfs_size", Math.min(500, Math.max(8, Number(e.target.value) || 8)))}
+                        value={form[diskKey]}
+                        onChange={(e) => set(diskKey, Math.min(500, Math.max(diskMin, Number(e.target.value) || diskMin)))}
                       />
                       <span className={styles.diskUnit}>GB</span>
                     </div>
-                  </div>
-                </FieldGroup>
-              ) : (
-                <FieldGroup label="磁碟空間">
-                  <div className={styles.diskRow}>
+                  }>
                     <input
-                      type="range" min={20} max={500} step={1}
+                      type="range" min={diskMin} max={500} step={1}
                       className={styles.slider}
-                      value={form.disk_size}
-                      onChange={(e) => set("disk_size", Number(e.target.value))}
+                      value={form[diskKey]}
+                      onChange={(e) => set(diskKey, Number(e.target.value))}
                     />
-                    <div className={styles.diskInput}>
-                      <input
-                        type="number" min={20} max={500}
-                        className={`${styles.input} ${styles.inputNumber}`}
-                        value={form.disk_size}
-                        onChange={(e) => set("disk_size", Math.min(500, Math.max(20, Number(e.target.value) || 20)))}
-                      />
-                      <span className={styles.diskUnit}>GB</span>
-                    </div>
-                  </div>
-                </FieldGroup>
-              )}
+                  </FieldGroup>
+                );
+              })()}
             </div>
 
             {/* ── GPU（VM only）── */}
@@ -516,27 +564,18 @@ export default function RequestFormPage({ onBack, className }) {
 
                 <FieldGroup
                   label="選擇 GPU"
-                  hint="GPU 會依所選時段重新計算可用性，送出前仍會再做一次檢查"
+                  hint="GPU 會依所選時段重新計算可用性，送出前仍會再做一次即時檢查"
                 >
                   <SelectField
                     value={form.gpu_mapping_id || "__none__"}
                     onChange={(v) => set("gpu_mapping_id", v === "__none__" ? "" : v)}
                     disabled={!canLoadGpu || gpuLoading || gpuOptions.length === 0}
-                    placeholder={canLoadGpu ? undefined : "請先選擇時段"}
+                    placeholder={!canLoadGpu ? "請先選擇時段" : undefined}
                   >
                     <option value="__none__">不需要 GPU</option>
                     {gpuOptions.map((gpu) => (
-                      <option
-                        key={gpu.mapping_id}
-                        value={gpu.mapping_id}
-                        disabled={gpu.available_count <= 0}
-                      >
-                        {gpu.description || gpu.mapping_id}
-                        {gpu.total_vram_mb > 0
-                          ? ` (${gpu.total_vram_mb >= 1024 ? `${(gpu.total_vram_mb / 1024).toFixed(0)} GB` : `${gpu.total_vram_mb} MB`})`
-                          : gpu.vram ? ` (${gpu.vram})` : ""}
-                        {` [${gpu.available_count}/${gpu.device_count} 可用]`}
-                        {gpu.available_count <= 0 ? " — 已滿" : ""}
+                      <option key={gpu.mapping_id} value={gpu.mapping_id} disabled={gpu.available_count <= 0}>
+                        {gpuLabel(gpu)}
                       </option>
                     ))}
                   </SelectField>
@@ -544,7 +583,7 @@ export default function RequestFormPage({ onBack, className }) {
               </div>
             )}
 
-            {/* ── 時段選擇 ── */}
+            {/* ── 租借時段 ── */}
             <div className={styles.formSection}>
               <h2 className={styles.sectionTitle}>
                 {mode === "immediate" ? "立即模式設定" : "租借時段"}
@@ -576,37 +615,40 @@ export default function RequestFormPage({ onBack, className }) {
                   )}
                 </>
               ) : (
-                <div className={styles.formGrid}>
-                  <FieldGroup label="開始時間" required error={errors.start_at}>
-                    <input
-                      type="datetime-local"
-                      className={styles.input}
-                      value={form.start_at}
-                      onChange={(e) => set("start_at", e.target.value)}
-                      min={new Date().toISOString().slice(0, 16)}
-                    />
-                  </FieldGroup>
-                  <FieldGroup label="結束時間" required error={errors.end_at}>
-                    <input
-                      type="datetime-local"
-                      className={styles.input}
-                      value={form.end_at}
-                      onChange={(e) => set("end_at", e.target.value)}
-                      min={form.start_at || new Date().toISOString().slice(0, 16)}
-                    />
-                  </FieldGroup>
-                </div>
+                <>
+                  <AvailabilityPanel
+                    draft={{
+                      resource_type: resourceType,
+                      cores:         form.cores,
+                      memory:        form.memory,
+                      ...(resourceType === "lxc"
+                        ? { rootfs_size: form.rootfs_size }
+                        : { disk_size:   form.disk_size }),
+                      gpu_required: form.gpu_mapping_id ? 1 : 0,
+                    }}
+                    onChange={({ start_at, end_at }) => {
+                      setForm((prev) => ({ ...prev, start_at: start_at ?? "", end_at: end_at ?? "" }));
+                      setErrors((prev) => ({ ...prev, start_at: "", end_at: "" }));
+                    }}
+                  />
+                  {(errors.start_at || errors.end_at) && (
+                    <p className={styles.fieldError}>{errors.start_at || errors.end_at}</p>
+                  )}
+                </>
               )}
             </div>
 
             {/* ── 申請原因 ── */}
             <div className={styles.formSection}>
               <h2 className={styles.sectionTitle}>申請原因</h2>
-              <FieldGroup label="申請原因" required error={errors.reason}>
+              <FieldGroup
+                label="請描述您的申請用途"
+                required
+                error={errors.reason}
+              >
                 <textarea
                   className={styles.textarea}
-                  rows={4}
-                  placeholder="請說明申請用途（至少 10 個字元）…"
+                  placeholder="請描述您的申請用途..."
                   value={form.reason}
                   onChange={(e) => set("reason", e.target.value)}
                 />
@@ -616,15 +658,10 @@ export default function RequestFormPage({ onBack, className }) {
 
           </form>
 
-          {submitError && (
-            <div className={styles.submitError}>
-              <MIcon name="error_outline" size={16} />
-              {submitError}
-            </div>
-          )}
-
           <div className={styles.formActions}>
-            <button type="button" className={styles.btnSecondary} onClick={handleBack}>取消</button>
+            <button type="button" className={styles.btnSecondary} onClick={handleBack}>
+              取消
+            </button>
             <button
               type="submit"
               form="request-form"
@@ -639,18 +676,169 @@ export default function RequestFormPage({ onBack, className }) {
           </div>
         </div>
 
-        {/* AI 側欄 */}
-        {aiOpen && <AiSidePanel />}
+        {/* Mobile AI 側欄 */}
+        {aiOpen && <AiSidePanel className={styles.aiPanelMobile} />}
+
+        {/* Desktop 右側面板（摘要 + AI）*/}
+        <div className={styles.rightPanel}>
+          <div className={styles.rightPanelTabs}>
+            {[
+              { key: "summary", label: "摘要",   icon: "receipt_long" },
+              { key: "ai",      label: "AI 助手", icon: "smart_toy"    },
+            ].map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                className={`${styles.rightPanelTab} ${rightTab === t.key ? styles.rightPanelTabActive : ""}`}
+                onClick={() => setRightTab(t.key)}
+              >
+                <MIcon name={t.icon} size={14} />
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {rightTab === "summary" && (
+            <div className={styles.summaryBody}>
+              {/* Type / mode chips */}
+              <div className={styles.summaryChips}>
+                <span className={`${styles.summaryChip} ${resourceType === "lxc" ? styles.summaryChipLxc : styles.summaryChipVm}`}>
+                  <MIcon name={resourceType === "lxc" ? "dashboard" : "computer"} size={12} />
+                  {resourceType === "lxc" ? "LXC 容器" : "QEMU 虛擬機"}
+                </span>
+                {isPrivileged && (
+                  <span className={`${styles.summaryChip} ${mode === "scheduled" ? styles.summaryChipScheduled : styles.summaryChipImmediate}`}>
+                    <MIcon name={mode === "scheduled" ? "calendar_month" : "bolt"} size={12} />
+                    {mode === "scheduled" ? "預約" : "立即"}
+                  </span>
+                )}
+              </div>
+
+              <div className={styles.summaryDivider} />
+
+              <div className={styles.summaryRow}>
+                <span className={styles.summaryLabel}>名稱</span>
+                <span className={`${styles.summaryValue} ${!form.hostname ? styles.summaryValueMuted : ""}`}>
+                  {form.hostname || "未填寫"}
+                </span>
+              </div>
+
+              {resourceType === "lxc" && (
+                <>
+                  {serviceTemplateName && (
+                    <div className={styles.summaryRow}>
+                      <span className={styles.summaryLabel}>服務模板</span>
+                      <span className={styles.summaryValue}>{serviceTemplateName}</span>
+                    </div>
+                  )}
+                  <div className={styles.summaryRow}>
+                    <span className={styles.summaryLabel}>映像檔</span>
+                    <span className={`${styles.summaryValue} ${!form.ostemplate ? styles.summaryValueMuted : ""}`}>
+                      {form.ostemplate ? formatOstemplate(form.ostemplate) : "未選擇"}
+                    </span>
+                  </div>
+                  {form.os_info && (
+                    <div className={styles.summaryRow}>
+                      <span className={styles.summaryLabel}>系統資訊</span>
+                      <span className={styles.summaryValue}>{form.os_info}</span>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {resourceType === "vm" && (
+                <>
+                  <div className={styles.summaryRow}>
+                    <span className={styles.summaryLabel}>作業系統</span>
+                    <span className={`${styles.summaryValue} ${!form.template_id ? styles.summaryValueMuted : ""}`}>
+                      {form.template_id
+                        ? (vmTemplates.find((t) => String(t.vmid) === String(form.template_id))?.name ?? form.template_id)
+                        : "未選擇"}
+                    </span>
+                  </div>
+                  {form.username && (
+                    <div className={styles.summaryRow}>
+                      <span className={styles.summaryLabel}>使用者</span>
+                      <span className={styles.summaryValue}>{form.username}</span>
+                    </div>
+                  )}
+                  {form.os_info && (
+                    <div className={styles.summaryRow}>
+                      <span className={styles.summaryLabel}>系統資訊</span>
+                      <span className={styles.summaryValue}>{form.os_info}</span>
+                    </div>
+                  )}
+                </>
+              )}
+
+              <div className={styles.summaryDivider} />
+
+              <div className={styles.summaryRow}>
+                <span className={styles.summaryLabel}>CPU</span>
+                <span className={styles.summaryValue}>{form.cores} 核心</span>
+              </div>
+              <div className={styles.summaryRow}>
+                <span className={styles.summaryLabel}>記憶體</span>
+                <span className={styles.summaryValue}>{(form.memory / 1024).toFixed(1)} GB</span>
+              </div>
+              <div className={styles.summaryRow}>
+                <span className={styles.summaryLabel}>硬碟</span>
+                <span className={styles.summaryValue}>
+                  {resourceType === "lxc" ? form.rootfs_size : form.disk_size} GB
+                </span>
+              </div>
+              {resourceType === "vm" && form.gpu_mapping_id && (
+                <div className={styles.summaryRow}>
+                  <span className={styles.summaryLabel}>GPU</span>
+                  <span className={styles.summaryValue}>
+                    {gpuOptions.find((g) => g.mapping_id === form.gpu_mapping_id)?.description || form.gpu_mapping_id}
+                  </span>
+                </div>
+              )}
+
+              <div className={styles.summaryDivider} />
+
+              {mode === "immediate" ? (
+                <div className={styles.summaryRow}>
+                  <span className={styles.summaryLabel}>時段</span>
+                  <span className={styles.summaryValue}>
+                    {form.immediate_no_end
+                      ? "立即 / 無限期"
+                      : form.end_at ? `至 ${formatDT(form.end_at)}` : "立即開始"}
+                  </span>
+                </div>
+              ) : form.start_at && form.end_at ? (
+                <>
+                  <div className={styles.summaryRow}>
+                    <span className={styles.summaryLabel}>開始</span>
+                    <span className={styles.summaryTimeValue}>{formatDT(form.start_at)}</span>
+                  </div>
+                  <div className={styles.summaryRow}>
+                    <span className={styles.summaryLabel}>結束</span>
+                    <span className={styles.summaryTimeValue}>{formatDT(form.end_at)}</span>
+                  </div>
+                </>
+              ) : (
+                <div className={styles.summaryRow}>
+                  <span className={styles.summaryLabel}>時段</span>
+                  <span className={`${styles.summaryValue} ${styles.summaryValueMuted}`}>未選擇</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {rightTab === "ai" && <AiSidePanel className={styles.aiPanelFill} />}
+        </div>
       </div>
 
-      {/* 浮動 AI Tab */}
+      {/* 浮動 AI Tab（僅手機）*/}
       <button
         type="button"
-        className={`${styles.aiFloatingTab} ${aiOpen ? styles.aiFloatingTabOpen : ""}`}
+        className={`${styles.aiFloatingTab} ${styles.aiFloatingTabMobileOnly} ${aiOpen ? styles.aiFloatingTabOpen : ""}`}
         onClick={() => setAiOpen((v) => !v)}
       >
         <MIcon name="smart_toy" size={16} />
-        <span>{aiOpen ? "收起 AI 助手" : "AI 助手"}</span>
+        <span>{aiOpen ? "關閉 AI" : "AI 助手"}</span>
         <MIcon name={aiOpen ? "keyboard_arrow_down" : "keyboard_arrow_up"} size={16} />
       </button>
 

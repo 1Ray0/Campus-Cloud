@@ -246,9 +246,19 @@
   padding: $spacing-8 $spacing-16;
   flex: 1;
   min-height: 0;
+  --form-header-h: 76px;
 
   @include respond-to(md) {
     padding: 0;
+  }
+
+  @include respond-to(lg) {
+    display: grid;
+    grid-template-columns: 13fr 7fr;
+    grid-template-rows: auto 1fr;
+    column-gap: $spacing-24;
+    row-gap: $spacing-24;
+    align-items: start;
   }
 }
 
@@ -258,6 +268,15 @@
   flex-wrap: wrap;
   gap: $spacing-16;
   flex-shrink: 0;
+
+  @include respond-to(lg) {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    position: sticky;
+    top: var(--layout-py);
+    z-index: 3;
+    height: var(--form-header-h);
+  }
 }
 
 
@@ -295,10 +314,8 @@
   }
 }
 
-/* AI 側欄 */
+/* AI 側欄（基底） */
 .aiPanel {
-  width: 320px;
-  flex-shrink: 0;
   @include flex-column;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -307,46 +324,154 @@
   animation: slideInRight 0.22s cubic-bezier(0.25, 0.8, 0.25, 1) both;
 }
 
-.aiPanelHeader {
+/* Mobile: 固定寬度側欄 */
+.aiPanelMobile {
+  width: 320px;
+  flex-shrink: 0;
+}
+
+/* Desktop 右側面板內：填滿容器，無邊框（由外框提供）*/
+.aiPanelFill {
+  flex: 1;
+  min-height: 0;
+  border: none;
+  border-radius: 0;
+  animation: none;
+}
+
+/* ── Desktop 右側面板（摘要 + AI 標籤）── */
+.rightPanel {
+  display: none;
+
+  @include respond-to(lg) {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 260px;
+    align-self: start;
+    position: sticky;
+    top: calc(var(--layout-py) + var(--form-header-h) + #{$spacing-24});
+    height: calc(100dvh - var(--layout-py) * 2 - var(--footer-h) - var(--form-header-h) - #{$spacing-24});
+    @include flex-column;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: $radius-12;
+    overflow: hidden;
+    display: flex;
+  }
+}
+
+.rightPanelTabs {
   display: flex;
-  align-items: center;
-  gap: $spacing-8;
-  padding: 12px $spacing-16;
   border-bottom: 1px solid var(--color-border);
   flex-shrink: 0;
 }
 
-.aiPanelIcon {
-  width: 26px;
-  height: 26px;
-  border-radius: $radius-8;
-  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+.rightPanelTab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 10px 8px;
+  font-size: $font-size-14;
+  font-weight: $font-weight-500;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color $transition-base, border-color $transition-base;
+
+  &:hover { color: var(--color-text-primary); }
+}
+
+.rightPanelTabActive {
   color: var(--color-primary);
-  @include flex-center;
+  border-bottom-color: var(--color-primary);
+}
+
+/* ── Summary body ── */
+.summaryBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: $spacing-16;
+  @include flex-column;
+  gap: $spacing-16;
+
+  &::-webkit-scrollbar { width: 4px; }
+  &::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: $radius-pill;
+  }
+}
+
+.summaryChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.summaryChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-radius: $radius-pill;
+  font-size: $font-size-14;
+  font-weight: $font-weight-500;
+}
+
+.summaryChipLxc      { background: color-mix(in srgb, var(--color-primary) 12%, transparent); color: var(--color-primary); }
+.summaryChipVm       { background: color-mix(in srgb, var(--color-primary) 12%, transparent); color: var(--color-primary); }
+.summaryChipScheduled { background: color-mix(in srgb, #0891b2 12%, transparent); color: #0891b2; }
+.summaryChipImmediate { background: color-mix(in srgb, #f59e0b 14%, transparent); color: #b45309; }
+
+.summaryDivider {
+  height: 1px;
+  background: var(--color-border);
+  margin: 2px 0;
+}
+
+.summaryRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: $spacing-8;
+}
+
+.summaryLabel {
+  font-size: $font-size-14;
+  color: var(--color-text-muted, #888);
+  white-space: nowrap;
   flex-shrink: 0;
 }
 
-.aiPanelTitle {
-  flex: 1;
+.summaryValue {
   font-size: $font-size-14;
-  font-weight: $font-weight-700;
-  color: var(--color-text-primary);
+  font-weight: $font-weight-500;
+  color: var(--color-text);
+  text-align: right;
+  min-width: 0;
+  @include text-truncate;
 }
 
-.aiPanelClear {
-  width: 28px;
-  height: 28px;
-  border-radius: $radius-8;
-  @include flex-center;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition: background $transition-base, color $transition-base;
+.summaryValueMuted {
+  color: var(--color-text-muted, #888);
+  font-weight: $font-weight-400;
+}
 
-  &:hover {
-    background: var(--color-hover);
-    color: var(--color-text);
+.summaryTimeValue {
+  font-size: $font-size-14;
+  font-weight: $font-weight-500;
+  color: var(--color-text);
+  text-align: right;
+}
+
+/* ── Floating AI tab（僅手機顯示）── */
+.aiFloatingTabMobileOnly {
+  @include respond-to(lg) {
+    display: none;
   }
 }
+
 
 .aiMessages {
   flex: 1;
@@ -434,8 +559,7 @@
 }
 
 .aiInputWrap {
-  display: flex;
-  align-items: flex-end;
+  @include flex-column;
   gap: $spacing-8;
   padding: 10px $spacing-16 12px;
   border-top: 1px solid var(--color-border);
@@ -443,7 +567,7 @@
 }
 
 .aiInput {
-  flex: 1;
+  width: 100%;
   resize: none;
   border: 1px solid var(--color-border);
   border-radius: $radius-8;
@@ -453,7 +577,7 @@
   font-family: inherit;
   color: var(--color-text);
   background: var(--color-hover);
-  max-height: 96px;
+  height: 64px;
   outline: none;
   transition: border-color $transition-base;
 
@@ -466,14 +590,46 @@
   &:disabled { opacity: 0.6; cursor: not-allowed; }
 }
 
+.aiInputToolbar {
+  display: flex;
+  align-items: center;
+  gap: $spacing-8;
+}
+
+
+.aiTemplateBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: $radius-pill;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: $font-size-12;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color $transition-base, color $transition-base, background $transition-base;
+
+  &:hover:not(:disabled) {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+    background: color-mix(in srgb, var(--color-primary) 6%, transparent);
+  }
+
+  &:disabled { opacity: 0.4; cursor: not-allowed; }
+}
+
+
 .aiSendBtn {
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border-radius: $radius-8;
   background: var(--color-primary);
   color: var(--color-text-on-primary);
   @include flex-center;
   flex-shrink: 0;
+  margin-left: auto;
   cursor: pointer;
   border: none;
   transition: opacity $transition-base;
@@ -506,16 +662,28 @@
   gap: $spacing-24;
   flex: 1;
   min-height: 0;
+
+  @include respond-to(lg) {
+    display: contents;
+  }
 }
 
 /* 表單捲動區 */
 .formScroll {
   @include flex-column;
   gap: $spacing-24;
-  flex: 1;
+  flex: 13 1 0;
   min-width: 0;
   overflow-y: auto;
   padding-bottom: $spacing-24;
+
+  @include respond-to(lg) {
+    grid-column: 1;
+    grid-row: 2;
+    flex: unset;
+    height: calc(100dvh - var(--layout-py) * 2 - var(--footer-h) - var(--form-header-h) - #{$spacing-24});
+    // mask-image: linear-gradient(to bottom, transparent 0, black 24px, black calc(100% - 24px), transparent 100%);
+  }
 
   &::-webkit-scrollbar { width: 4px; }
   &::-webkit-scrollbar-thumb {
@@ -539,7 +707,7 @@
 }
 
 .sectionTitle {
-  font-size: $font-size-16;
+  font-size: $font-size-14;
   font-weight: $font-weight-700;
   color: var(--color-text-primary);
 }
@@ -594,7 +762,7 @@
   &::placeholder { color: var(--color-text-muted, #888); }
 }
 
-.textarea { resize: vertical; }
+.textarea { resize: none; height: 80px; }
 
 .typeToggle {
   display: flex;
@@ -635,11 +803,20 @@
 }
 
 .sliderTicks {
-  display: flex;
-  justify-content: space-between;
+  position: relative;
+  height: 16px;
   font-size: $font-size-12;
   color: var(--color-text-muted, #888);
   margin-top: -2px;
+
+  span {
+    position: absolute;
+    transform: translateX(-50%);
+    white-space: nowrap;
+
+    &:first-child { transform: translateX(0); }
+    &:last-child  { transform: translateX(-100%); }
+  }
 }
 
 .formActions {
@@ -718,7 +895,6 @@
   display: flex;
   align-items: center;
   gap: $spacing-8;
-  align-self: flex-end;
 }
 
 .inputNumber {

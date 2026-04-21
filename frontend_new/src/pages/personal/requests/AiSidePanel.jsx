@@ -9,7 +9,7 @@ const MIcon = ({ name, size = 20 }) => (
 
 const GREETING = "嗨！我是 AI 助手，可以幫你決定要申請什麼規格的資源。\n你有什麼需求嗎？";
 
-export default function AiSidePanel() {
+export default function AiSidePanel({ className = "" }) {
   const [messages, setMessages] = useState([{ role: "assistant", content: GREETING }]);
   const [input, setInput]       = useState("");
   const [loading, setLoading]   = useState(false);
@@ -44,20 +44,7 @@ export default function AiSidePanel() {
   }
 
   return (
-    <div className={styles.aiPanel}>
-      <div className={styles.aiPanelHeader}>
-        <span className={styles.aiPanelIcon}><MIcon name="smart_toy" size={16} /></span>
-        <span className={styles.aiPanelTitle}>AI 助手</span>
-        <button
-          type="button"
-          className={styles.aiPanelClear}
-          title="清除對話"
-          onClick={() => setMessages([{ role: "assistant", content: GREETING }])}
-        >
-          <MIcon name="refresh" size={16} />
-        </button>
-      </div>
-
+    <div className={`${styles.aiPanel} ${className}`}>
       <div className={styles.aiMessages} ref={scrollRef}>
         {messages.map((msg, i) => (
           <div key={i} className={`${styles.aiMsgRow} ${msg.role === "user" ? styles.aiMsgRowUser : ""}`}>
@@ -87,17 +74,22 @@ export default function AiSidePanel() {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder="輸入訊息… (Enter 送出)"
-          rows={1}
           disabled={loading}
         />
-        <button
-          type="button"
-          className={styles.aiSendBtn}
-          onClick={send}
-          disabled={loading || !input.trim()}
-        >
-          <MIcon name="send" size={16} />
-        </button>
+        <div className={styles.aiInputToolbar}>
+          <button type="button" className={styles.aiTemplateBtn} disabled={loading}>
+            <MIcon name="auto_fix_high" size={14} />
+            產生推薦配置
+          </button>
+<button
+            type="button"
+            className={styles.aiSendBtn}
+            onClick={send}
+            disabled={loading || !input.trim()}
+          >
+            <MIcon name="send" size={16} />
+          </button>
+        </div>
       </div>
     </div>
   );
