@@ -46,7 +46,7 @@ function isDraftReady(draft) {
   return draft.resource_type === "vm" ? Boolean(draft.disk_size) : Boolean(draft.rootfs_size);
 }
 
-export default function AvailabilityPanel({ draft, onChange }) {
+export default function AvailabilityPanel({ draft, onChange, onHintChange }) {
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState(false);
@@ -66,6 +66,9 @@ export default function AvailabilityPanel({ draft, onChange }) {
 
   const onChangeRef = useRef(onChange);
   useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
+
+  const onHintChangeRef = useRef(onHintChange);
+  useEffect(() => { onHintChangeRef.current = onHintChange; }, [onHintChange]);
 
   /* ── Fetch ── */
   const draftReady = isDraftReady(draft);
@@ -165,6 +168,16 @@ export default function AvailabilityPanel({ draft, onChange }) {
     });
   }, [startDate, endDate, startHour, endHour, dayMap]);
 
+  const isComplete = startDate && endDate && startHour != null && endHour != null;
+
+  useEffect(() => {
+    let hint = null;
+    if (!startDate) hint = "點選日期即可選取單日，或繼續點選其他日期延伸範圍";
+    else if (picking === "end" && startDate === endDate) hint = `已選單日 ${startDate}，可繼續點選其他日期延伸範圍`;
+    else if (picking === "start" && !isComplete) hint = "日期已選定，點選日期即可重新選擇";
+    onHintChangeRef.current?.(hint);
+  }, [startDate, endDate, startHour, endHour, picking, isComplete]);
+
   /* ── Early returns ── */
   if (!draftReady) return (
     <div className={styles.root}>
@@ -189,7 +202,6 @@ export default function AvailabilityPanel({ draft, onChange }) {
   const hasRange       = picking === "start" && Boolean(startDate) && Boolean(endDate) && startDate !== endDate;
   const startHours     = startDate ? getSelectableHours(startDate) : [];
   const endHours       = endDate   ? getSelectableHours(endDate)   : [];
-  const isComplete     = startDate && endDate && startHour != null && endHour != null;
 
   return (
     <div className={styles.root}>
@@ -287,25 +299,6 @@ export default function AvailabilityPanel({ draft, onChange }) {
         </div>
       )}
 
-      {/* ── Contextual hint ── */}
-      {!startDate && (
-        <p className={styles.hint}>
-          <MIcon name="info" size={13} />
-          {" 點選日期即可選取單日，或繼續點選其他日期延伸範圍"}
-        </p>
-      )}
-      {startDate && picking === "end" && startDate === endDate && (
-        <p className={styles.hint}>
-          <MIcon name="arrow_forward" size={13} />
-          {`已選單日 ${startDate}，可繼續點選其他日期延伸範圍`}
-        </p>
-      )}
-      {startDate && picking === "start" && !isComplete && (
-        <p className={styles.hint}>
-          <MIcon name="schedule" size={13} />
-          {"日期已選定，點選日期即可重新選擇"}
-        </p>
-      )}
     </div>
   );
 }

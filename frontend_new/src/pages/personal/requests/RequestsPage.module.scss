@@ -110,12 +110,10 @@
 /* ── Request card ── */
 .card {
   @include flex-column;
+  @include glass-surface;
   gap: $spacing-16;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
   border-radius: $radius-16;
   padding: $spacing-16;
-  box-shadow: var(--shadow-sm);
   transition: box-shadow $transition-base, transform $transition-base;
 
   &:hover {
@@ -329,8 +327,7 @@
 /* AI 側欄（基底） */
 .aiPanel {
   @include flex-column;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  @include glass-surface;
   border-radius: $radius-12;
   overflow: hidden;
   animation: slideInRight 0.22s cubic-bezier(0.25, 0.8, 0.25, 1) both;
@@ -364,8 +361,7 @@
     top: calc(var(--layout-py) + var(--form-header-h) + #{$spacing-24});
     height: calc(100dvh - var(--layout-py) * 2 - var(--footer-h) - var(--form-header-h) - #{$spacing-24});
     @include flex-column;
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
+    @include glass-surface;
     border-radius: $radius-12;
     overflow: hidden;
     display: flex;
@@ -711,17 +707,29 @@
 
 .formSection {
   @include flex-column;
+  @include glass-surface;
   gap: $spacing-16;
   padding: $spacing-24;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
   border-radius: $radius-12;
 }
 
+.sectionTitleRow {
+  display: flex;
+  align-items: baseline;
+  gap: $spacing-8;
+  flex-wrap: wrap;
+}
+
 .sectionTitle {
-  font-size: $font-size-14;
+  font-size: $font-size-18;
   font-weight: $font-weight-700;
   color: var(--color-text-primary);
+}
+
+.sectionHint {
+  font-size: $font-size-12;
+  color: var(--color-text-secondary);
+  font-weight: $font-weight-400;
 }
 
 .formGrid {
@@ -761,15 +769,12 @@
   font-size: $font-size-14;
   font-family: inherit;
   color: var(--color-text);
-  background: var(--color-hover);
-  transition: border-color $transition-base, background $transition-base;
+  background: var(--color-surface);
+  transition: border-color $transition-base;
   outline: none;
   box-sizing: border-box;
 
-  &:focus {
-    border-color: var(--color-primary);
-    background: var(--color-surface);
-  }
+  &:focus { border-color: var(--color-primary); }
 
   &::placeholder { color: var(--color-text-muted, #888); }
 }
@@ -865,7 +870,7 @@
   font-size: $font-size-14;
   font-family: inherit;
   color: var(--color-text);
-  background: var(--color-hover);
+  background: var(--color-surface);
   outline: none;
   cursor: pointer;
   appearance: none;
@@ -873,10 +878,10 @@
   background-repeat: no-repeat;
   background-position: right 10px center;
   padding-right: 36px;
-  transition: border-color $transition-base, background $transition-base;
+  transition: border-color $transition-base;
   box-sizing: border-box;
 
-  &:focus { border-color: var(--color-primary); background: var(--color-surface); }
+  &:focus { border-color: var(--color-primary); }
   &:disabled { opacity: 0.6; cursor: not-allowed; }
 }
 

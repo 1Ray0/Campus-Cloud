@@ -134,6 +134,7 @@ export default function RequestFormPage({ onBack, className }) {
   });
   const [errors, setErrors]           = useState({});
   const [submitting, setSubmitting]   = useState(false);
+  const [availabilityHint, setAvailabilityHint] = useState(null);
 
   /* API data */
   const [lxcTemplates, setLxcTemplates] = useState([]);
@@ -607,9 +608,14 @@ export default function RequestFormPage({ onBack, className }) {
 
             {/* ── 租借時段 ── */}
             <div className={styles.formSection}>
-              <h2 className={styles.sectionTitle}>
-                {mode === "immediate" ? "立即模式設定" : "租借時段"}
-              </h2>
+              <div className={styles.sectionTitleRow}>
+                <h2 className={styles.sectionTitle}>
+                  {mode === "immediate" ? "立即模式設定" : "租借時段"}
+                </h2>
+                {mode === "scheduled" && availabilityHint && (
+                  <span className={styles.sectionHint}>{availabilityHint}</span>
+                )}
+              </div>
 
               {mode === "immediate" ? (
                 <>
@@ -652,6 +658,7 @@ export default function RequestFormPage({ onBack, className }) {
                       setForm((prev) => ({ ...prev, start_at: start_at ?? "", end_at: end_at ?? "" }));
                       setErrors((prev) => ({ ...prev, start_at: "", end_at: "" }));
                     }}
+                    onHintChange={setAvailabilityHint}
                   />
                   {(errors.start_at || errors.end_at) && (
                     <p className={styles.fieldError}>{errors.start_at || errors.end_at}</p>
