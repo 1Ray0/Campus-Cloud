@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
 from sqlmodel import Session, select
@@ -13,7 +13,6 @@ from app.core.db import engine
 from app.domain.scheduling.models import ScheduledTask
 from app.domain.scheduling.runner import run_polling_scheduler
 from app.exceptions import NotFoundError
-from app.infrastructure.proxmox import get_proxmox_settings
 from app.models import (
     VMMigrationJob,
     VMMigrationJobStatus,
@@ -1236,6 +1235,58 @@ def _process_pending_migration_jobs(
     return migrated_count
 
 
+def _adopt_or_provision_due_request(
+    *,
+    session: Session,
+    request: VMRequest,
+) -> tuple[int, str | None, str | None, bool] | None:
+    """Acquire lock, then adopt existing Proxmox resource or fully provision.
+
+    Returns ``(vmid, actual_node, strategy, started)`` on success, or ``None``
+    if the lock cannot be acquired (another worker has it) or the request has
+    already been handled.
+    """
+    # SELECT FOR UPDATE SKIP LOCKED — skip if another session holds it.
+    locked = vm_request_repo.get_vm_request_by_id(
+        session=session,
+        request_id=request.id,
+        for_update=True,
+        skip_locked=True,
+    )
+    if locked is None:
+        return None
+    # Re-check: another process may have set vmid or changed status.
+    if locked.vmid is not None or locked.status == VMRequestStatus.provisioning:
+        return None
+
+    # Try adopting an existing Proxmox resource first.
+    adopted = _adopt_existing_resource(session=session, request=locked)
+    if adopted is not None:
+        vmid, actual_node, strategy, started = adopted
+        session.commit()
+        return vmid, actual_node, strategy, started
+
+    # Full provision: mark provisioning → clone outside txn → mark running.
+    # _provision_new_resource manages its own sessions/commits.
+    _provision_new_resource(session=session, request=locked)
+    refreshed = vm_request_repo.get_vm_request_by_id(
+        session=session,
+        request_id=locked.id,
+    )
+    if refreshed is None or refreshed.vmid is None:
+        return None
+    started = refreshed.status in (
+        VMRequestStatus.provisioning,
+        VMRequestStatus.running,
+    )
+    return (
+        refreshed.vmid,
+        refreshed.actual_node,
+        refreshed.placement_strategy_used,
+        started,
+    )
+
+
 def _ensure_request_running(
     *,
     session: Session,
@@ -1253,41 +1304,41 @@ def _ensure_request_running(
 
     # ---- No VMID yet → need to provision ---------------------------------
     if request.vmid is None:
-        # SELECT FOR UPDATE SKIP LOCKED — skip if another session holds it.
-        locked = vm_request_repo.get_vm_request_by_id(
-            session=session,
-            request_id=request.id,
-            for_update=True,
-            skip_locked=True,
-        )
-        if locked is None:
+        outcome = _adopt_or_provision_due_request(session=session, request=request)
+        if outcome is None:
             return False, migrations_used
-        # Re-check: another process may have set vmid or changed status.
-        if locked.vmid is not None or locked.status == VMRequestStatus.provisioning:
-            return False, migrations_used
-
-        # Try adopting an existing Proxmox resource first.
-        adopted = _adopt_existing_resource(session=session, request=locked)
-        if adopted is not None:
-            vmid, actual_node, strategy, started = adopted
-            session.commit()
-            return started, migrations_used
-
-        # Full provision: mark provisioning → clone outside txn → mark running.
-        # _provision_new_resource manages its own sessions/commits.
-        _provision_new_resource(session=session, request=locked)
-        refreshed = vm_request_repo.get_vm_request_by_id(
-            session=session,
-            request_id=locked.id,
+        _vmid, outcome_actual_node, _strategy, started = outcome
+        # If freshly provisioned on the desired node, mark migration as
+        # completed so any "pending/idle" state left over from the most
+        # recent active-window rebalance is reconciled.
+        refreshed_after = vm_request_repo.get_vm_request_by_id(
+            session=session, request_id=request.id,
         )
-        started = bool(
-            refreshed is not None
-            and refreshed.vmid is not None
-            and refreshed.status in (
-                VMRequestStatus.provisioning,
-                VMRequestStatus.running,
+        if (
+            refreshed_after is not None
+            and refreshed_after.vmid is not None
+            and refreshed_after.desired_node
+            and outcome_actual_node
+            and refreshed_after.desired_node == outcome_actual_node
+            and refreshed_after.migration_status
+            in (VMMigrationStatus.idle, VMMigrationStatus.pending)
+        ):
+            vm_request_repo.update_vm_request_provisioning(
+                session=session,
+                db_request=refreshed_after,
+                vmid=refreshed_after.vmid,
+                assigned_node=refreshed_after.assigned_node or outcome_actual_node,
+                desired_node=refreshed_after.desired_node,
+                actual_node=outcome_actual_node,
+                placement_strategy_used=refreshed_after.placement_strategy_used,
+                migration_status=VMMigrationStatus.completed,
+                migration_error=None,
+                rebalance_epoch=refreshed_after.rebalance_epoch,
+                last_rebalanced_at=refreshed_after.last_rebalanced_at,
+                last_migrated_at=refreshed_after.last_migrated_at,
+                commit=False,
             )
-        )
+            session.commit()
         return started, migrations_used
 
     # ---- Already provisioned → ensure VM is started ----------------------
@@ -1653,7 +1704,9 @@ async def run_scheduler(stop_event: asyncio.Event) -> None:
 
 def process_pending_deletions_task() -> int:
     """Scheduler tick：處理一筆 pending DeletionRequest（每 tick 最多一筆，避免長阻塞）。"""
-    from app.services.resource import deletion_service  # noqa: PLC0415 — 避免 import cycle
+    from app.services.resource import (
+        deletion_service,  # noqa: PLC0415 — 避免 import cycle
+    )
 
     try:
         with Session(engine) as session:

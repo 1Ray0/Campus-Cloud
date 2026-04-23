@@ -79,6 +79,11 @@ const useAuth = (options?: {
   })
 
   const logout = () => {
+    // Fire-and-forget: revoke server-side blacklist entry. We don't await
+    // because the user expects logout to be instant; if the request fails
+    // (e.g. offline), the token_version mechanism + natural expiry still
+    // protect the session.
+    void AuthSessionService.revokeTokens()
     AuthSessionService.clearTokens()
     queryClient.setQueryData(queryKeys.auth.currentUser, null)
     navigate({ to: "/login" })

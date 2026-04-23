@@ -1,24 +1,29 @@
 import uuid
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
-from app.api.deps import AdminUser, CurrentUser, SessionDep
+from app.api.deps import AdminUser, CurrentUser, SessionDep, rate_limit_by_user
+from app.models import VMRequestStatus
 from app.schemas import (
     VMRequestAvailabilityRequest,
     VMRequestAvailabilityResponse,
     VMRequestCreate,
     VMRequestPublic,
-    VMRequestReviewContext,
     VMRequestReview,
+    VMRequestReviewContext,
     VMRequestsPublic,
 )
-from app.models import VMRequestStatus
 from app.services.vm import vm_request_availability_service, vm_request_service
 
 router = APIRouter(prefix="/vm-requests", tags=["vm-requests"])
 
+# Limit to 20 VM-request creations per user per minute (anti-abuse).
+_CREATE_RATE_LIMIT = Depends(
+    rate_limit_by_user(scope="vm-request-create", limit=20, window_seconds=60)
+)
 
-@router.post("/", response_model=VMRequestPublic)
+
+@router.post("/", response_model=VMRequestPublic, dependencies=[_CREATE_RATE_LIMIT])
 def create_vm_request(
     request_in: VMRequestCreate, session: SessionDep, current_user: CurrentUser
 ):

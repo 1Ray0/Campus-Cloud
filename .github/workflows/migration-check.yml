@@ -1,0 +1,35 @@
+name: Migration sanity
+
+on:
+  pull_request:
+    paths:
+      - "backend/app/models/**"
+      - "backend/app/alembic/**"
+      - "backend/scripts/check-migrations.sh"
+
+jobs:
+  check-migrations:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          cache-dependency-path: uv.lock
+
+      - name: Sync backend deps
+        run: uv sync --frozen
+
+      - name: Run migration check
+        env:
+          PROJECT_NAME: campus-cloud-ci
+          FIRST_SUPERUSER: admin@example.com
+          FIRST_SUPERUSER_PASSWORD: ci-migration-check-password
+          SECRET_KEY: ci-migration-check-secret-key-not-for-production
+          ENVIRONMENT: local
+        run: bash scripts/check-migrations.sh

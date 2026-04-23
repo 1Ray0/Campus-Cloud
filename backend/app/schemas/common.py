@@ -23,6 +23,8 @@ class TokenPayload(BaseModel):
     sub: str | None = None
     type: str | None = None
     ver: int = 0
+    jti: str | None = None
+    exp: int | None = None
 
 
 class NewPassword(BaseModel):

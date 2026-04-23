@@ -1,14 +1,15 @@
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
-import threading
 from types import SimpleNamespace
 
 import pytest
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from app.core.security import encrypt_value
 from app.ai.pve_advisor.schemas import NodeCapacity, PlacementRequest
-from app.exceptions import BadRequestError, ProxmoxError, ProvisioningError
+from app.core.security import encrypt_value
+from app.exceptions import BadRequestError, ProvisioningError, ProxmoxError
+from app.infrastructure.proxmox import operations as proxmox_service
 from app.models import (
     ProxmoxConfig,
     ProxmoxNode,
@@ -17,6 +18,7 @@ from app.models import (
     SpecChangeRequest,
     SpecChangeRequestStatus,
     SpecChangeType,
+    SubnetConfig,
     User,
     UserRole,
     VMMigrationJob,
@@ -33,12 +35,15 @@ from app.schemas import (
     VMRequestCreate,
     VMRequestReview,
 )
-from app.infrastructure.proxmox import operations as proxmox_service
 from app.services.proxmox import provisioning_service
 from app.services.scheduling import support as scheduling_support
 from app.services.scheduling import vm_request_schedule_service
 from app.services.user import user_service
-from app.services.vm import spec_change_service, vm_request_placement_service, vm_request_service
+from app.services.vm import (
+    spec_change_service,
+    vm_request_placement_service,
+    vm_request_service,
+)
 
 
 @pytest.fixture()
@@ -103,6 +108,23 @@ def _seed_managed_storage(
             user_priority=user_priority,
         )
     )
+
+
+def _seed_subnet_config(session: Session) -> None:
+    """Seed the singleton SubnetConfig so provisioning_service.create_vm can
+    run its IP-management steps in tests that don't exercise IP allocation."""
+    if session.get(SubnetConfig, 1) is not None:
+        return
+    session.add(
+        SubnetConfig(
+            id=1,
+            cidr="10.0.0.0/24",
+            gateway="10.0.0.1",
+            bridge_name="vmbr0",
+            gateway_vm_ip="10.0.0.2",
+        )
+    )
+    session.commit()
 
 
 def test_vm_request_create_preserves_environment_type(
@@ -751,6 +773,7 @@ def test_create_vm_prefers_admin_selected_storage(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     user = _create_user(db)
+    _seed_subnet_config(db)
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
@@ -939,7 +962,7 @@ def test_process_due_request_starts_rebalances_active_window_and_migrates(
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.proxmox_service.list_node_storages",
-        lambda node: [{"storage": "local-lvm"}],
+        lambda node: [{"storage": "local-lvm", "shared": 1}],
     )
 
     def _migrate(source_node, target_node, vmid, resource_type, online=True, **kwargs):
@@ -1049,7 +1072,7 @@ def test_process_due_request_starts_provisions_new_active_request_on_rebalanced_
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.proxmox_service.list_node_storages",
-        lambda node: [{"storage": "local-lvm"}],
+        lambda node: [{"storage": "local-lvm", "shared": 1}],
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.audit_service.log_action",
@@ -1486,7 +1509,7 @@ def test_process_due_request_starts_retries_pending_migration_job_until_limit(
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.proxmox_service.list_node_storages",
-        lambda node: [{"storage": "local-lvm"}],
+        lambda node: [{"storage": "local-lvm", "shared": 1}],
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.proxmox_service.migrate_resource",
@@ -2368,6 +2391,7 @@ def test_create_vm_uses_template_node_and_normalizes_disk_size(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     user = _create_user(db)
+    _seed_subnet_config(db)
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
@@ -2461,6 +2485,7 @@ def test_create_vm_falls_back_when_requested_storage_is_unavailable(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     user = _create_user(db)
+    _seed_subnet_config(db)
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
@@ -3066,7 +3091,7 @@ def test_process_pending_migration_jobs_reclaims_expired_running_claim(
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.proxmox_service.list_node_storages",
-        lambda node: [{"storage": "local-lvm"}],
+        lambda node: [{"storage": "local-lvm", "shared": 1}],
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.proxmox_service.migrate_resource",
@@ -3308,7 +3333,7 @@ def test_migrate_request_to_desired_node_refreshes_job_claim_while_waiting(
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.proxmox_service.list_node_storages",
-        lambda node: [{"storage": "local-lvm"}],
+        lambda node: [{"storage": "local-lvm", "shared": 1}],
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.proxmox_service.find_resource",

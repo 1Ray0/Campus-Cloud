@@ -1,4 +1,12 @@
 {
+  "errorBoundary": {
+    "title": "發生未預期的錯誤",
+    "scopedTitle": "無法載入 {{scope}}",
+    "description": "渲染此區域時發生錯誤。您可以重試，或重新整理頁面。",
+    "details": "錯誤詳情",
+    "retry": "重試",
+    "reload": "重新整理頁面"
+  },
   "buttons": {
     "save": "儲存",
     "cancel": "取消",

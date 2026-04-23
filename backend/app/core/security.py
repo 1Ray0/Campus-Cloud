@@ -2,6 +2,7 @@ import base64
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any
+from uuid import uuid4
 
 import jwt
 from cryptography.fernet import Fernet
@@ -58,6 +59,7 @@ def create_access_token(
         "sub": str(subject),
         "type": "access",
         "ver": token_version,
+        "jti": uuid4().hex,
     }
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
 
@@ -73,6 +75,7 @@ def create_refresh_token(
         "sub": str(subject),
         "type": "refresh",
         "ver": token_version,
+        "jti": uuid4().hex,
     }
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
 

@@ -1299,7 +1299,7 @@ export function ResourceCreatePage({
               <LoadingButton
                 type="submit"
                 loading={mutation.isPending}
-                disabled={!isSubmitReady || !isQuickStartTemplateReady}
+                disabled={!isQuickStartTemplateReady}
               >
                 {t("resources:create.submitButton")}
               </LoadingButton>

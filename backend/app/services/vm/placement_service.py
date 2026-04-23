@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlmodel import Session
 
 from app.ai.pve_advisor import recommendation_service as advisor_service
 from app.ai.pve_advisor.schemas import (
     NodeCapacity,
-    PlacementDecision,
     PlacementPlan,
     PlacementRequest,
     ResourceType,
@@ -17,23 +16,27 @@ from app.ai.pve_advisor.schemas import (
 from app.domain.placement import policy as placement_policy
 from app.domain.placement import scorer as placement_scorer
 from app.domain.placement.models import (
-    DEFAULT_CPU_PEAK_HIGH_SHARE,
-    DEFAULT_CPU_PEAK_WARN_SHARE,
-    DEFAULT_RAM_PEAK_HIGH_SHARE,
-    DEFAULT_RAM_PEAK_WARN_SHARE,
     AssignmentEvaluation as _AssignmentEvaluation,
+)
+from app.domain.placement.models import (
     NodeScoreBreakdown,
+)
+from app.domain.placement.models import (
     PlacementTuning as _PlacementTuning,
+)
+from app.domain.placement.models import (
     StorageSelection as _StorageSelection,
+)
+from app.domain.placement.models import (
     WorkingStoragePool as _WorkingStoragePool,
 )
 from app.domain.placement.storage import (
-    STORAGE_SPEED_RANK as _STORAGE_SPEED_RANK,
     reserve_storage_pool as _reserve_storage_pool,
+)
+from app.domain.placement.storage import (
     select_best_storage_for_request as _select_best_storage_for_request,
 )
 from app.models import VMRequest
-from app.repositories import proxmox_storage as proxmox_storage_repo
 from app.repositories import vm_request as vm_request_repo
 from app.services.scheduling import policy as scheduling_policy
 from app.services.scheduling import support as scheduling_support
@@ -513,25 +516,35 @@ def _evaluate_active_assignment_map(
     storage_penalty_total = 0.0
     priority_total = 0.0
     movement_count = 0
+    storage_speed_rank_total = 0.0
+    storage_user_priority_total = 0.0
+    _INFEASIBLE_OBJECTIVE: tuple[float, ...] = (
+        float("inf"),
+        float("inf"),
+        10**9,
+        float("inf"),
+        float("inf"),
+        float("inf"),
+    )
 
     for request in ordered_requests:
         target_node = assignments.get(request.id)
         if not target_node:
             return _AssignmentEvaluation(
                 feasible=False,
-                objective=(float("inf"), float("inf"), 10**9, float("inf")),
+                objective=_INFEASIBLE_OBJECTIVE,
             )
         allowed_targets = (allowed_target_nodes_by_request or {}).get(request.id)
         if allowed_targets is not None and target_node not in allowed_targets:
             return _AssignmentEvaluation(
                 feasible=False,
-                objective=(float("inf"), float("inf"), 10**9, float("inf")),
+                objective=_INFEASIBLE_OBJECTIVE,
             )
         node = by_node.get(target_node)
         if node is None:
             return _AssignmentEvaluation(
                 feasible=False,
-                objective=(float("inf"), float("inf"), 10**9, float("inf")),
+                objective=_INFEASIBLE_OBJECTIVE,
             )
 
         placement_request = _to_placement_request(request)
@@ -556,7 +569,7 @@ def _evaluate_active_assignment_map(
         ):
             return _AssignmentEvaluation(
                 feasible=False,
-                objective=(float("inf"), float("inf"), 10**9, float("inf")),
+                objective=_INFEASIBLE_OBJECTIVE,
             )
 
         storage_selection: _StorageSelection | None = None
@@ -571,7 +584,7 @@ def _evaluate_active_assignment_map(
             if storage_selection is None:
                 return _AssignmentEvaluation(
                     feasible=False,
-                    objective=(float("inf"), float("inf"), 10**9, float("inf")),
+                    objective=_INFEASIBLE_OBJECTIVE,
                 )
 
         _reserve_request_on_capacities(
@@ -586,6 +599,8 @@ def _evaluate_active_assignment_map(
                 disk_overcommit_ratio=disk_overcommit_ratio,
             )
             storage_penalty_total += storage_selection.contention_penalty
+            storage_speed_rank_total += float(storage_selection.speed_rank)
+            storage_user_priority_total += float(storage_selection.user_priority)
         priority_total += float(priorities.get(target_node, 5))
         if _provisioned_current_node(request) not in {None, target_node}:
             movement_count += 1
@@ -593,7 +608,7 @@ def _evaluate_active_assignment_map(
     if max_migrations is not None and movement_count > max(max_migrations, 0):
         return _AssignmentEvaluation(
             feasible=False,
-            objective=(float("inf"), float("inf"), 10**9, float("inf")),
+            objective=_INFEASIBLE_OBJECTIVE,
         )
 
     node_score_map = {
@@ -607,7 +622,14 @@ def _evaluate_active_assignment_map(
     )
     return _AssignmentEvaluation(
         feasible=True,
-        objective=(max_node_score, total_score, priority_total, movement_count),
+        objective=(
+            max_node_score,
+            total_score,
+            priority_total,
+            float(movement_count),
+            storage_speed_rank_total,
+            storage_user_priority_total,
+        ),
         max_node_score=max_node_score,
         total_score=total_score,
         priority_total=priority_total,
@@ -1216,7 +1238,7 @@ def rebalance_active_assignments(
 def compute_node_score_breakdown(
     *,
     session: Session,
-    candidate_evals: dict[str, "_AssignmentEvaluation"],
+    candidate_evals: dict[str, _AssignmentEvaluation],
     selected_node: str | None,
     priorities: dict[str, int] | None = None,
 ) -> list[NodeScoreBreakdown]:

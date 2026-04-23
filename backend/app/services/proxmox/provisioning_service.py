@@ -396,21 +396,22 @@ def create_vm(
         }
         if net_cfg.get("dns_servers"):
             config_updates["nameserver"] = net_cfg["dns_servers"]
-        if vm_data.gpu_mapping_id:
+        gpu_mapping_id = getattr(vm_data, "gpu_mapping_id", None)
+        if gpu_mapping_id:
             from app.services.proxmox import gpu_service
             try:
-                gpu_detail = gpu_service.get_gpu_mapping(vm_data.gpu_mapping_id)
+                gpu_detail = gpu_service.get_gpu_mapping(gpu_mapping_id)
                 if gpu_detail.available_count <= 0:
                     raise ProxmoxError(
-                        f"GPU {vm_data.gpu_mapping_id} 已無可用插槽 "
+                        f"GPU {gpu_mapping_id} 已無可用插槽 "
                         f"(used={gpu_detail.used_count}/{gpu_detail.device_count})"
                     )
             except ProxmoxError:
                 raise
             except Exception as e:
-                logger.error("GPU 可用性檢查失敗 (%s): %s", vm_data.gpu_mapping_id, e)
-                raise ProxmoxError(f"無法驗證 GPU '{vm_data.gpu_mapping_id}'：{e}")
-            config_updates["hostpci0"] = f"mapping={vm_data.gpu_mapping_id}"
+                logger.error("GPU 可用性檢查失敗 (%s): %s", gpu_mapping_id, e)
+                raise ProxmoxError(f"無法驗證 GPU '{gpu_mapping_id}'：{e}")
+            config_updates["hostpci0"] = f"mapping={gpu_mapping_id}"
         proxmox_service.update_config(target_node, new_vmid, "qemu", **config_updates)
 
         if vm_data.disk_size:

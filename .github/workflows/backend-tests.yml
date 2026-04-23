@@ -1,0 +1,155 @@
+name: Backend Tests
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-tests.yml"
+
+# Cancel in-progress runs for the same PR/branch when a new commit is pushed
+concurrency:
+  group: backend-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11"]
+
+    defaults:
+      run:
+        working-directory: backend
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: testpass
+          # IMPORTANT: name MUST contain "test" / "pytest" / "ci" so the
+          # safety guard in tests/conftest.py allows it on localhost.
+          POSTGRES_DB: app_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d app_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      # --- Database / cache ---
+      POSTGRES_SERVER: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: testpass
+      POSTGRES_DB: app_test
+      REDIS_URL: redis://localhost:6379/0
+
+      # --- Required by app.core.config ---
+      # Use long random-ish strings to avoid the "changethis" warning being
+      # treated as an error by any future strict-mode check.
+      SECRET_KEY: ci-test-secret-key-not-for-production-use-32b
+      FIRST_SUPERUSER: admin@example.com
+      FIRST_SUPERUSER_PASSWORD: ci-test-password-not-for-production
+      EMAILS_FROM_EMAIL: noreply@example.com
+      ENVIRONMENT: local
+      PROJECT_NAME: campus-cloud-ci
+      BACKEND_CORS_ORIGINS: '["http://localhost"]'
+
+      # --- Proxmox: tests must mock these; values are placeholders ---
+      PROXMOX_HOST: proxmox.invalid
+      PROXMOX_USER: root@pam
+      PROXMOX_PASSWORD: not-a-real-password
+      PROXMOX_VERIFY_SSL: "false"
+      PROXMOX_ISO_STORAGE: local
+      PROXMOX_DATA_STORAGE: local-lvm
+
+      # --- Logging: keep CI logs human-readable ---
+      LOG_LEVEL: WARNING
+      LOG_JSON: "false"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Sync dependencies (incl. dev)
+        run: uv sync --frozen
+
+      - name: Wait for Postgres
+        run: |
+          for i in {1..30}; do
+            if pg_isready -h localhost -p 5432 -U postgres; then
+              echo "Postgres is ready"; exit 0
+            fi
+            sleep 1
+          done
+          echo "Postgres did not become ready in time"; exit 1
+
+      - name: Run prestart (alembic upgrade + initial data)
+        run: bash scripts/prestart.sh
+
+      - name: Run pytest with coverage
+        run: |
+          uv run coverage run -m pytest tests/ -v --tb=short
+          uv run coverage xml -o coverage.xml
+          uv run coverage report
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          retention-days: 14
+
+  lint:
+    name: ruff + mypy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv python install 3.11
+      - run: uv sync --frozen
+      - name: ruff check
+        run: uv run ruff check .
+      - name: mypy (non-blocking, report only)
+        run: uv run mypy . || true
+        # mypy is currently noisy; flip to blocking once errors are cleaned up

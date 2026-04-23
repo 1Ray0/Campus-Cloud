@@ -1,15 +1,24 @@
+import uuid
+
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from app.features.ai.config import settings as ai_api_settings
 from app.core.config import settings
+from app.features.ai.config import settings as ai_api_settings
 from app.repositories import user as user_repo
 from app.schemas import UserCreate
 from tests.utils.user import user_authentication_headers
 from tests.utils.utils import random_lower_string
 
 
+def _unique_email(email: str) -> str:
+    """Make email unique per test run so repeated local runs don't collide."""
+    local, _, domain = email.partition("@")
+    return f"{local}-{uuid.uuid4().hex[:8]}@{domain or 'example.com'}"
+
+
 def _create_test_user_headers(client: TestClient, db: Session, email: str) -> dict[str, str]:
+    email = _unique_email(email)
     password = random_lower_string()
     user_repo.create_user(
         session=db,
@@ -92,8 +101,10 @@ def test_ai_api_request_review_flow(
     latest = payload["data"][0]
     assert latest["request_id"] == created["id"]
     assert latest["base_url"] == ai_api_settings.resolved_public_base_url
-    assert latest["api_key"] == ai_api_settings.ai_api_upstream_api_key
-    assert latest["api_key_prefix"] == ai_api_settings.ai_api_upstream_api_key[:8]
+    # Per-user API keys are generated on approval (prefix "ccai_") rather than
+    # echoing the upstream shared key.
+    assert isinstance(latest["api_key"], str) and latest["api_key"].startswith("ccai_")
+    assert latest["api_key_prefix"] == latest["api_key"][:8]
 
 
 def test_ai_api_requests_require_admin_for_review(

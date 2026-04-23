@@ -4,11 +4,11 @@ import logging
 import uuid
 from datetime import date, datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlmodel import select
 
-from app.api.deps import InstructorUser, SessionDep
+from app.api.deps import InstructorUser, SessionDep, rate_limit_by_user
 from app.core.authorizers import require_group_access
 from app.exceptions import BadRequestError, NotFoundError
 from app.models import User
@@ -137,7 +137,17 @@ def _build_job_public(session: SessionDep, job) -> BatchProvisionJobPublic:
     )
 
 
-@router.post("/{group_id}", response_model=BatchProvisionJobPublic)
+@router.post(
+    "/{group_id}",
+    response_model=BatchProvisionJobPublic,
+    dependencies=[
+        Depends(
+            rate_limit_by_user(
+                scope="batch-provision", limit=5, window_seconds=60
+            )
+        )
+    ],
+)
 def start_batch_provision(
     group_id: uuid.UUID,
     body: BatchProvisionRequest,

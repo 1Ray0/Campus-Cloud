@@ -3,6 +3,7 @@ import { Link, Outlet, useRouterState } from "@tanstack/react-router"
 import { AlertTriangle } from "lucide-react"
 
 import { Footer } from "@/components/Common/Footer"
+import { ErrorBoundary } from "@/components/ErrorBoundary"
 import { JobsBanner } from "@/components/Jobs/JobsBanner"
 import AppSidebar from "@/components/Sidebar/AppSidebar"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
@@ -31,7 +32,9 @@ export function AppLayout() {
           <SubnetBanner isAdmin={isAdmin} />
           {isFullscreen ? (
             <main className="flex-1 min-w-0 overflow-hidden">
-              <Outlet />
+              <ErrorBoundary>
+                <Outlet />
+              </ErrorBoundary>
             </main>
           ) : (
             <>
@@ -42,7 +45,9 @@ export function AppLayout() {
                 )}
               >
                 <div className="w-full min-w-0 max-w-full">
-                  <Outlet />
+                  <ErrorBoundary>
+                    <Outlet />
+                  </ErrorBoundary>
                 </div>
               </main>
               <Footer

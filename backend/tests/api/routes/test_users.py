@@ -4,13 +4,28 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from app.repositories import user as user_repo
 from app.core.config import settings
 from app.core.security import verify_password
 from app.models import User
+from app.repositories import user as user_repo
 from app.schemas import UserCreate
 from tests.utils.user import create_random_user
 from tests.utils.utils import random_email, random_lower_string
+
+
+def _refresh_superuser_token(
+    client: TestClient, headers: dict[str, str], password: str
+) -> None:
+    """Re-login as FIRST_SUPERUSER and mutate `headers` in place.
+
+    Needed after any operation that bumps the superuser's ``token_version``
+    (e.g. password change), so module-scoped fixtures keep a valid token.
+    """
+    r = client.post(
+        f"{settings.API_V1_STR}/login/access-token",
+        data={"username": settings.FIRST_SUPERUSER, "password": password},
+    )
+    headers["Authorization"] = f"Bearer {r.json()['access_token']}"
 
 
 def test_get_users_superuser_me(
@@ -65,6 +80,8 @@ def test_get_existing_user_as_superuser(
     password = random_lower_string()
     user_in = UserCreate(email=username, password=password)
     user = user_repo.create_user(session=db, user_create=user_in)
+    db.commit()
+    db.refresh(user)
     user_id = user.id
     r = client.get(
         f"{settings.API_V1_STR}/users/{user_id}",
@@ -93,6 +110,8 @@ def test_get_existing_user_current_user(client: TestClient, db: Session) -> None
     password = random_lower_string()
     user_in = UserCreate(email=username, password=password)
     user = user_repo.create_user(session=db, user_create=user_in)
+    db.commit()
+    db.refresh(user)
     user_id = user.id
 
     login_data = {
@@ -152,6 +171,7 @@ def test_create_user_existing_username(
     password = random_lower_string()
     user_in = UserCreate(email=username, password=password)
     user_repo.create_user(session=db, user_create=user_in)
+    db.commit()
     data = {"email": username, "password": password}
     r = client.post(
         f"{settings.API_V1_STR}/users/",
@@ -159,7 +179,7 @@ def test_create_user_existing_username(
         json=data,
     )
     created_user = r.json()
-    assert r.status_code == 400
+    assert r.status_code == 409
     assert "_id" not in created_user
 
 
@@ -189,6 +209,7 @@ def test_retrieve_users(
     password2 = random_lower_string()
     user_in2 = UserCreate(email=username2, password=password2)
     user_repo.create_user(session=db, user_create=user_in2)
+    db.commit()
 
     r = client.get(f"{settings.API_V1_STR}/users/", headers=superuser_token_headers)
     all_users = r.json()
@@ -249,6 +270,12 @@ def test_update_password_me(
     verified, _ = verify_password(new_password, user_db.hashed_password)
     assert verified
 
+    # Password change bumps token_version to invalidate old tokens — the
+    # module-scoped fixture's token is now stale. Re-login and mutate the
+    # fixture dict in place so downstream tests sharing the fixture keep a
+    # valid token.
+    _refresh_superuser_token(client, superuser_token_headers, new_password)
+
     # Revert to the old password to keep consistency in test
     old_data = {
         "current_password": new_password,
@@ -266,6 +293,11 @@ def test_update_password_me(
         settings.FIRST_SUPERUSER_PASSWORD, user_db.hashed_password
     )
     assert verified
+
+    # Revert also bumped token_version; refresh fixture again for downstream.
+    _refresh_superuser_token(
+        client, superuser_token_headers, settings.FIRST_SUPERUSER_PASSWORD
+    )
 
 
 def test_update_password_me_incorrect_password(
@@ -290,6 +322,8 @@ def test_update_user_me_email_exists(
     password = random_lower_string()
     user_in = UserCreate(email=username, password=password)
     user = user_repo.create_user(session=db, user_create=user_in)
+    db.commit()
+    db.refresh(user)
 
     data = {"email": user.email}
     r = client.patch(
@@ -363,7 +397,7 @@ def test_register_user_already_exists_error(client: TestClient) -> None:
         f"{settings.API_V1_STR}/users/signup",
         json=data,
     )
-    assert r.status_code == 400
+    assert r.status_code == 409
     assert r.json()["detail"] == "The user with this email already exists in the system"
 
 
@@ -374,6 +408,8 @@ def test_update_user(
     password = random_lower_string()
     user_in = UserCreate(email=username, password=password)
     user = user_repo.create_user(session=db, user_create=user_in)
+    db.commit()
+    db.refresh(user)
 
     data = {"full_name": "Updated_full_name"}
     r = client.patch(
@@ -418,6 +454,9 @@ def test_update_user_email_exists(
     password2 = random_lower_string()
     user_in2 = UserCreate(email=username2, password=password2)
     user2 = user_repo.create_user(session=db, user_create=user_in2)
+    db.commit()
+    db.refresh(user)
+    db.refresh(user2)
 
     data = {"email": user2.email}
     r = client.patch(
@@ -434,6 +473,8 @@ def test_delete_user_me(client: TestClient, db: Session) -> None:
     password = random_lower_string()
     user_in = UserCreate(email=username, password=password)
     user = user_repo.create_user(session=db, user_create=user_in)
+    db.commit()
+    db.refresh(user)
     user_id = user.id
 
     login_data = {
@@ -479,6 +520,8 @@ def test_delete_user_super_user(
     password = random_lower_string()
     user_in = UserCreate(email=username, password=password)
     user = user_repo.create_user(session=db, user_create=user_in)
+    db.commit()
+    db.refresh(user)
     user_id = user.id
     r = client.delete(
         f"{settings.API_V1_STR}/users/{user_id}",
@@ -524,6 +567,8 @@ def test_delete_user_without_privileges(
     password = random_lower_string()
     user_in = UserCreate(email=username, password=password)
     user = user_repo.create_user(session=db, user_create=user_in)
+    db.commit()
+    db.refresh(user)
 
     r = client.delete(
         f"{settings.API_V1_STR}/users/{user.id}",
