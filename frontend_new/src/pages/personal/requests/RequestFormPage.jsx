@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import styles from "./RequestsPage.module.scss";
 import { useAuth } from "../../../contexts/AuthContext";
 import { useToast } from "../../../hooks/useToast";
@@ -98,6 +98,19 @@ export default function RequestFormPage({ onBack, className }) {
   const [serviceTemplateName, setServiceTemplateName] = useState("");
   const [serviceTemplateSlug, setServiceTemplateSlug] = useState("");
   const [showTemplatePanel, setShowTemplatePanel]     = useState(false);
+  const [panelLeaving, setPanelLeaving]               = useState(false);
+  const returnedFromTemplate = useRef(false);
+
+  function openTemplatePanel() {
+    returnedFromTemplate.current = false;
+    setPanelLeaving(false);
+    setShowTemplatePanel(true);
+  }
+  function closeTemplatePanel() {
+    returnedFromTemplate.current = true;
+    setPanelLeaving(true);
+    setTimeout(() => { setShowTemplatePanel(false); setPanelLeaving(false); }, 180);
+  }
 
   /* Form state */
   const [resourceType, setResourceType] = useState("lxc");
@@ -269,7 +282,7 @@ export default function RequestFormPage({ onBack, className }) {
   function handleSelectTemplate(template) {
     setServiceTemplateName(template.name || "");
     setServiceTemplateSlug(template.slug || "");
-    setShowTemplatePanel(false);
+    closeTemplatePanel();
     const res = template.install_methods?.[0]?.resources;
     if (res) {
       if (res.cpu) set("cores", res.cpu);
@@ -298,6 +311,15 @@ export default function RequestFormPage({ onBack, className }) {
       {/* ── 主體：表單 + AI 側欄 ── */}
       <div className={styles.formPageBody}>
         <div className={styles.formScroll}>
+          {showTemplatePanel ? (
+            <FastTemplatesPanel
+              inline
+              onClose={closeTemplatePanel}
+              onSelect={handleSelectTemplate}
+              className={panelLeaving ? styles.animSlideOutRight : styles.animSlideInRight}
+            />
+          ) : (
+          <div className={`${styles.formInner} ${returnedFromTemplate.current ? styles.animSlideInLeft : ""}`}>
           <form id="request-form" onSubmit={handleSubmit} className={styles.form}>
 
             {/* ── 申請模式（管理員／老師） ── */}
@@ -382,7 +404,7 @@ export default function RequestFormPage({ onBack, className }) {
                     <button
                       type="button"
                       className={styles.templateSelectBtn}
-                      onClick={() => setShowTemplatePanel(true)}
+                      onClick={openTemplatePanel}
                     >
                       <MIcon name="layers" size={16} />
                       選擇模板
@@ -670,6 +692,8 @@ export default function RequestFormPage({ onBack, className }) {
               }
             </button>
           </div>
+          </div>
+          )}
         </div>
 
         {/* Mobile AI 側欄 */}
@@ -838,13 +862,6 @@ export default function RequestFormPage({ onBack, className }) {
         <MIcon name={aiOpen ? "keyboard_arrow_down" : "keyboard_arrow_up"} size={16} />
       </button>
 
-      {/* 服務模板選擇面板 */}
-      {showTemplatePanel && (
-        <FastTemplatesPanel
-          onClose={() => setShowTemplatePanel(false)}
-          onSelect={handleSelectTemplate}
-        />
-      )}
     </div>
   );
 }

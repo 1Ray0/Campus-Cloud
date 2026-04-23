@@ -65,11 +65,13 @@
 
 .calendarGrid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 2px;
+  grid-template-columns: repeat(7, 44px);
+  gap: 4px;
+  justify-content: space-between;
 }
 
 .calendarDayHeader {
+  width: 44px;
   text-align: center;
   font-size: 0.7rem;
   font-weight: 600;
@@ -78,7 +80,8 @@
 }
 
 .calendarDay {
-  aspect-ratio: 1;
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;

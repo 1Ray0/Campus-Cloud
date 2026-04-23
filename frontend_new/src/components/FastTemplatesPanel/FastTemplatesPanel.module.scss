@@ -1,15 +1,53 @@
 @use "../../assets/styles/variables" as *;
 @use "../../assets/styles/mixins" as *;
 
+/* ── Inline mode ── */
+.inlineRoot {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 0;
+}
+
+.inlineNav {
+  display: flex;
+  align-items: center;
+  padding: 10px $spacing-16 0;
+  flex-shrink: 0;
+}
+
+.inlineBackBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: $radius-8;
+  font-size: $font-size-14;
+  font-weight: $font-weight-500;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: background $transition-base, border-color $transition-base, color $transition-base;
+
+  &:hover {
+    background: var(--color-hover);
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+  }
+}
+
 /* ── Overlay ── */
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(30, 40, 80, 0.25);
   z-index: 200;
   @include flex-center;
   padding: $spacing-16;
-  backdrop-filter: blur(2px);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   animation: fadeIn 0.15s ease;
 }
 
