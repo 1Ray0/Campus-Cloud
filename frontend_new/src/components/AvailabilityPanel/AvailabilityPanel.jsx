@@ -14,6 +14,26 @@ const MIcon = ({ name, size = 16 }) => (
   </span>
 );
 
+function TimeGroup({ label, date, hours, value, onChange }) {
+  return (
+    <div className={styles.timeGroup}>
+      <span className={styles.timeLabel}>{label}</span>
+      <span className={styles.timeDate}>{date ?? "—"}</span>
+      <select
+        className={styles.timeSelect}
+        value={value ?? ""}
+        disabled={!date}
+        onChange={(e) => onChange(Number(e.target.value))}
+      >
+        <option value="" disabled>選擇時間</option>
+        {hours.map((h) => (
+          <option key={h} value={h}>{String(h).padStart(2, "0")}:00</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 const MONTH_NAMES = ["一月","二月","三月","四月","五月","六月","七月","八月","九月","十月","十一月","十二月"];
 const DAY_HEADERS = ["日","一","二","三","四","五","六"];
 
@@ -113,17 +133,21 @@ export default function AvailabilityPanel({ draft, onChange }) {
   function handleDayClick(dateStr, level) {
     if (!level || level === "none") return;
     if (picking === "start" || !startDate) {
-      setStartDate(dateStr); setEndDate(null);
+      // First click always sets a single-day selection
+      setStartDate(dateStr); setEndDate(dateStr);
       setStartHour(null);   setEndHour(null);
       setPicking("end");
-    } else if (dateStr < startDate) {
-      setStartDate(dateStr); setEndDate(null);
-      setStartHour(null);   setEndHour(null);
-    } else if (dateStr === startDate) {
-      setEndDate(null);
     } else {
-      setEndDate(dateStr);
-      setPicking("start");
+      // picking === "end": extend range or reset to new single-day
+      if (dateStr > startDate) {
+        setEndDate(dateStr);
+        setEndHour(null);
+        setPicking("start");
+      } else {
+        // Clicked same or earlier date: restart as single-day
+        setStartDate(dateStr); setEndDate(dateStr);
+        setStartHour(null);   setEndHour(null);
+      }
     }
   }
 
@@ -160,10 +184,12 @@ export default function AvailabilityPanel({ draft, onChange }) {
     </div>
   );
 
-  const effectiveEnd  = endDate ?? (picking === "end" && hoverDate > startDate ? hoverDate : null);
-  const startHours    = startDate ? getSelectableHours(startDate) : [];
-  const endHours      = endDate   ? getSelectableHours(endDate)   : [];
-  const isComplete    = startDate && endDate && startHour != null && endHour != null;
+  const isHoverPreview = picking === "end" && Boolean(hoverDate) && hoverDate > startDate;
+  const effectiveEnd   = isHoverPreview ? hoverDate : endDate;
+  const hasRange       = picking === "start" && Boolean(startDate) && Boolean(endDate) && startDate !== endDate;
+  const startHours     = startDate ? getSelectableHours(startDate) : [];
+  const endHours       = endDate   ? getSelectableHours(endDate)   : [];
+  const isComplete     = startDate && endDate && startHour != null && endHour != null;
 
   return (
     <div className={styles.root}>
@@ -190,33 +216,37 @@ export default function AvailabilityPanel({ draft, onChange }) {
             const level    = getDayLevel(dateStr);
             const isPast   = dateStr < todayStr;
             const disabled = isPast || !level || level === "none";
-            const isStart  = dateStr === startDate;
-            const isEnd    = dateStr === endDate;
-            const inRange  = startDate && effectiveEnd
+            const isStart   = dateStr === startDate;
+            const isEnd     = dateStr === endDate;
+            const inRange   = Boolean(startDate) && Boolean(effectiveEnd)
               && dateStr > startDate && dateStr < effectiveEnd;
-            const isPreview = !endDate && inRange;
+            const isPreview = isHoverPreview && inRange;
+
+            const dayClass = [
+              styles.calendarDay,
+              !disabled && level === "good"    && styles.calendarDayGood,
+              !disabled && level === "limited" && styles.calendarDayLimited,
+              !disabled && level === "none"    && styles.calendarDayNone,
+              isStart                          && styles.calendarDayStart,
+              isEnd                            && styles.calendarDayEnd,
+              isStart && hasRange              && styles.calendarDayStartBar,
+              isEnd   && hasRange              && styles.calendarDayEndBar,
+              inRange && !isPreview            && styles.calendarDayInRange,
+              isPreview                        && styles.calendarDayPreview,
+              disabled                         && styles.calendarDayDisabled,
+            ].filter(Boolean).join(" ");
 
             return (
               <button
                 key={dateStr}
                 type="button"
                 disabled={disabled}
-                className={[
-                  styles.calendarDay,
-                  !disabled && level === "good"    ? styles.calendarDayGood    : "",
-                  !disabled && level === "limited" ? styles.calendarDayLimited : "",
-                  !disabled && level === "none"    ? styles.calendarDayNone    : "",
-                  isStart    ? styles.calendarDayStart   : "",
-                  isEnd      ? styles.calendarDayEnd     : "",
-                  inRange && !isPreview ? styles.calendarDayInRange   : "",
-                  isPreview  ? styles.calendarDayPreview : "",
-                  disabled   ? styles.calendarDayDisabled : "",
-                ].filter(Boolean).join(" ")}
+                className={dayClass}
                 onClick={() => handleDayClick(dateStr, level)}
                 onMouseEnter={() => picking === "end" && setHoverDate(dateStr)}
                 onMouseLeave={() => setHoverDate(null)}
               >
-                {d.getDate()}
+                <span className={styles.dayInner}>{d.getDate()}</span>
               </button>
             );
           })}
@@ -240,36 +270,8 @@ export default function AvailabilityPanel({ draft, onChange }) {
       {/* ── Time pickers ── */}
       {(startDate || endDate) && (
         <div className={styles.timeRow}>
-          <div className={styles.timeGroup}>
-            <span className={styles.timeLabel}>開始</span>
-            <span className={styles.timeDate}>{startDate ?? "—"}</span>
-            <select
-              className={styles.timeSelect}
-              value={startHour ?? ""}
-              disabled={!startDate}
-              onChange={(e) => setStartHour(Number(e.target.value))}
-            >
-              <option value="" disabled>選擇時間</option>
-              {startHours.map((h) => (
-                <option key={h} value={h}>{String(h).padStart(2, "0")}:00</option>
-              ))}
-            </select>
-          </div>
-          <div className={styles.timeGroup}>
-            <span className={styles.timeLabel}>結束</span>
-            <span className={styles.timeDate}>{endDate ?? "—"}</span>
-            <select
-              className={styles.timeSelect}
-              value={endHour ?? ""}
-              disabled={!endDate}
-              onChange={(e) => setEndHour(Number(e.target.value))}
-            >
-              <option value="" disabled>選擇時間</option>
-              {endHours.map((h) => (
-                <option key={h} value={h}>{String(h).padStart(2, "0")}:00</option>
-              ))}
-            </select>
-          </div>
+          <TimeGroup label="開始" date={startDate} hours={startHours} value={startHour} onChange={setStartHour} />
+          <TimeGroup label="結束" date={endDate}   hours={endHours}   value={endHour}   onChange={setEndHour} />
         </div>
       )}
 
@@ -285,12 +287,24 @@ export default function AvailabilityPanel({ draft, onChange }) {
         </div>
       )}
 
-      {/* ── Prompt ── */}
+      {/* ── Contextual hint ── */}
       {!startDate && (
-        <p className={styles.hint}>點選開始日期</p>
+        <p className={styles.hint}>
+          <MIcon name="info" size={13} />
+          {" 點選日期即可選取單日，或繼續點選其他日期延伸範圍"}
+        </p>
       )}
-      {startDate && !endDate && (
-        <p className={styles.hint}>再點選結束日期</p>
+      {startDate && picking === "end" && startDate === endDate && (
+        <p className={styles.hint}>
+          <MIcon name="arrow_forward" size={13} />
+          {`已選單日 ${startDate}，可繼續點選其他日期延伸範圍`}
+        </p>
+      )}
+      {startDate && picking === "start" && !isComplete && (
+        <p className={styles.hint}>
+          <MIcon name="schedule" size={13} />
+          {"日期已選定，點選日期即可重新選擇"}
+        </p>
       )}
     </div>
   );

@@ -9,6 +9,9 @@
 
 /* ── Hint ── */
 .hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 0.8rem;
   color: var(--color-text-secondary);
   line-height: 1.5;
@@ -65,13 +68,11 @@
 
 .calendarGrid {
   display: grid;
-  grid-template-columns: repeat(7, 44px);
-  gap: 4px;
-  justify-content: space-between;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0;
 }
 
 .calendarDayHeader {
-  width: 44px;
   text-align: center;
   font-size: 0.7rem;
   font-weight: 600;
@@ -80,62 +81,111 @@
 }
 
 .calendarDay {
-  width: 44px;
+  position: relative;
   height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
+  border-radius: 0;
   border: none;
-  font-size: 0.8rem;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, transform 0.1s;
   background: transparent;
   color: var(--color-text-primary);
+  padding: 0;
+}
 
-  &:not(:disabled):hover {
+/* Inner circle — handles availability color, selection, hover scale */
+.dayInner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 0.8rem;
+  transition: background 0.12s, color 0.12s, transform 0.1s;
+
+  .calendarDay:not(:disabled):hover & {
     transform: scale(1.1);
   }
 }
 
-/* ── Day availability colors ── */
-.calendarDayGood {
+/* ── Day availability colors (on inner circle) ── */
+.calendarDayGood .dayInner {
   background: color-mix(in srgb, #22c55e 18%, transparent);
   color: #15803d;
 }
 
-.calendarDayLimited {
+.calendarDayLimited .dayInner {
   background: color-mix(in srgb, #f59e0b 18%, transparent);
   color: #b45309;
 }
 
-.calendarDayNone {
+.calendarDayNone .dayInner {
   background: color-mix(in srgb, #ef4444 14%, transparent);
   color: #b91c1c;
 }
 
 /* ── Range selection ── */
-.calendarDayStart,
-.calendarDayEnd {
+
+/* Start / End: solid circle on .dayInner */
+.calendarDayStart .dayInner,
+.calendarDayEnd .dayInner {
   background: var(--color-primary) !important;
   color: #fff !important;
   font-weight: 600;
 }
 
-.calendarDayInRange {
+/* Shared mixin for the connecting bar pseudo-element */
+%rangebar {
+  content: '';
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 36px; // same height as dayInner circle
   background: color-mix(in srgb, var(--color-primary) 18%, transparent);
-  color: var(--color-primary);
+  pointer-events: none;
 }
 
-.calendarDayPreview {
-  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
-  color: var(--color-primary);
+/* Start with range: bar from center to right edge */
+.calendarDayStartBar::after {
+  @extend %rangebar;
+  left: 50%;
+  right: 0;
 }
+
+/* End with range: bar from left edge to center */
+.calendarDayEndBar::before {
+  @extend %rangebar;
+  right: 50%;
+  left: 0;
+}
+
+/* In-range: full-width bar, seamlessly connects with neighbours */
+.calendarDayInRange::before {
+  @extend %rangebar;
+  left: 0;
+  right: 0;
+}
+
+.calendarDayInRange .dayInner { background: transparent !important; color: var(--color-primary); }
+
+/* Hover preview: same but lighter */
+.calendarDayPreview::before {
+  @extend %rangebar;
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+  left: 0;
+  right: 0;
+}
+
+.calendarDayPreview .dayInner { background: transparent !important; color: var(--color-primary); }
 
 .calendarDayDisabled {
   opacity: 0.25;
   cursor: not-allowed;
-  &:hover { transform: none; }
+  &:hover .dayInner { transform: none; }
 }
 
 /* ── Time pickers ── */
@@ -187,6 +237,7 @@
 /* ── Legend ── */
 .legend {
   display: flex;
+  justify-content: center;
   flex-wrap: wrap;
   gap: 8px 14px;
 }
