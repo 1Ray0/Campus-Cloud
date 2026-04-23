@@ -516,25 +516,35 @@ def _evaluate_active_assignment_map(
     storage_penalty_total = 0.0
     priority_total = 0.0
     movement_count = 0
+    storage_speed_rank_total = 0.0
+    storage_user_priority_total = 0.0
+    _INFEASIBLE_OBJECTIVE: tuple[float, ...] = (
+        float("inf"),
+        float("inf"),
+        10**9,
+        float("inf"),
+        float("inf"),
+        float("inf"),
+    )
 
     for request in ordered_requests:
         target_node = assignments.get(request.id)
         if not target_node:
             return _AssignmentEvaluation(
                 feasible=False,
-                objective=(float("inf"), float("inf"), 10**9, float("inf")),
+                objective=_INFEASIBLE_OBJECTIVE,
             )
         allowed_targets = (allowed_target_nodes_by_request or {}).get(request.id)
         if allowed_targets is not None and target_node not in allowed_targets:
             return _AssignmentEvaluation(
                 feasible=False,
-                objective=(float("inf"), float("inf"), 10**9, float("inf")),
+                objective=_INFEASIBLE_OBJECTIVE,
             )
         node = by_node.get(target_node)
         if node is None:
             return _AssignmentEvaluation(
                 feasible=False,
-                objective=(float("inf"), float("inf"), 10**9, float("inf")),
+                objective=_INFEASIBLE_OBJECTIVE,
             )
 
         placement_request = _to_placement_request(request)
@@ -559,7 +569,7 @@ def _evaluate_active_assignment_map(
         ):
             return _AssignmentEvaluation(
                 feasible=False,
-                objective=(float("inf"), float("inf"), 10**9, float("inf")),
+                objective=_INFEASIBLE_OBJECTIVE,
             )
 
         storage_selection: _StorageSelection | None = None
@@ -574,7 +584,7 @@ def _evaluate_active_assignment_map(
             if storage_selection is None:
                 return _AssignmentEvaluation(
                     feasible=False,
-                    objective=(float("inf"), float("inf"), 10**9, float("inf")),
+                    objective=_INFEASIBLE_OBJECTIVE,
                 )
 
         _reserve_request_on_capacities(
@@ -589,6 +599,8 @@ def _evaluate_active_assignment_map(
                 disk_overcommit_ratio=disk_overcommit_ratio,
             )
             storage_penalty_total += storage_selection.contention_penalty
+            storage_speed_rank_total += float(storage_selection.speed_rank)
+            storage_user_priority_total += float(storage_selection.user_priority)
         priority_total += float(priorities.get(target_node, 5))
         if _provisioned_current_node(request) not in {None, target_node}:
             movement_count += 1
@@ -596,7 +608,7 @@ def _evaluate_active_assignment_map(
     if max_migrations is not None and movement_count > max(max_migrations, 0):
         return _AssignmentEvaluation(
             feasible=False,
-            objective=(float("inf"), float("inf"), 10**9, float("inf")),
+            objective=_INFEASIBLE_OBJECTIVE,
         )
 
     node_score_map = {
@@ -610,7 +622,14 @@ def _evaluate_active_assignment_map(
     )
     return _AssignmentEvaluation(
         feasible=True,
-        objective=(max_node_score, total_score, priority_total, movement_count),
+        objective=(
+            max_node_score,
+            total_score,
+            priority_total,
+            float(movement_count),
+            storage_speed_rank_total,
+            storage_user_priority_total,
+        ),
         max_node_score=max_node_score,
         total_score=total_score,
         priority_total=priority_total,

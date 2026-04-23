@@ -5,6 +5,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
+# Manual smoke scripts that use a `test_` prefix for CLI ergonomics but are not
+# pytest tests. Excluding them prevents pytest from collecting their top-level
+# functions (which take positional CLI args, not fixtures).
+collect_ignore = ["test_ai_api.py"]
+
 from app.core.config import settings
 from app.core.db import engine, init_db
 from app.main import app

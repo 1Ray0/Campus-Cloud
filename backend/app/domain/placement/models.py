@@ -61,7 +61,7 @@ class PlacementTuning:
 @dataclass(frozen=True)
 class AssignmentEvaluation:
     feasible: bool
-    objective: tuple[float, float, float, int]
+    objective: tuple[float, ...]
     max_node_score: float = float("inf")
     total_score: float = float("inf")
     priority_total: float = float("inf")
