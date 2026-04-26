@@ -25,9 +25,9 @@ from typing import Any
 import httpx
 from sqlmodel import Session
 
+from app.ai.pve_log.collector import collect_snapshot
 from app.ai.pve_log.config import settings
 from app.ai.pve_log.schemas import ChatResponse, ToolCallRecord
-from app.ai.pve_log.collector import collect_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -503,7 +503,7 @@ async def chat(
                         result = await _execute_ssh_tool(func_args, session=session)
                     else:
                         result = _execute_tool_sync(_snapshot, func_name, func_args)
-                    
+
                     result_dict = result if isinstance(result, dict) else {}
                     if result_dict.get("pending"):
                         needs_confirmation = True
@@ -563,7 +563,7 @@ async def chat(
             )
             if not choices2:
                 logger.error("vLLM 第二次回應 choices 為空：%s", data2)
-            
+
             # 將最終回覆也加入 messages
             if reply:
                 messages.append(choices2[0].get("message") or {"role": "assistant", "content": reply})
@@ -574,8 +574,8 @@ async def chat(
             reply = assistant_msg.get("content") or ""
 
     return ChatResponse(
-        reply=reply, 
-        tools_called=tools_called, 
-        needs_confirmation=needs_confirmation, 
+        reply=reply,
+        tools_called=tools_called,
+        needs_confirmation=needs_confirmation,
         messages=messages
     )

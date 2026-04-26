@@ -31,7 +31,6 @@ from typing import Any
 
 import httpx
 import paramiko
-
 from sqlmodel import Session
 
 from app.ai.pve_log.config import settings
