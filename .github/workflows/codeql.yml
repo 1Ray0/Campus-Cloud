@@ -31,7 +31,7 @@ jobs:
             build-mode: none
           - language: go
             build-mode: none
-          - language: action
+          - language: actions
             build-mode: none
 
     steps:
