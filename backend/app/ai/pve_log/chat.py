@@ -23,6 +23,7 @@ import logging
 from typing import Any
 
 import httpx
+from sqlmodel import Session
 
 from app.ai.pve_log.config import settings
 from app.ai.pve_log.schemas import ChatResponse, ToolCallRecord
@@ -259,7 +260,11 @@ def _execute_tool_sync(snapshot, name: str, args: dict) -> Any:
         return {"error": f"未知工具：{name}"}
 
 
-async def _execute_ssh_tool(args: dict) -> dict:
+async def _execute_ssh_tool(
+    args: dict,
+    *,
+    session: Session | None = None,
+) -> dict:
     """執行 ssh_exec 工具（async，需要等待 SSH 連線）。
 
     重要設計：
@@ -284,7 +289,7 @@ async def _execute_ssh_tool(args: dict) -> dict:
         ssh_port=int(args.get("ssh_port", 22)),
         require_confirm=True,  # 支援中斷與接續確認，改為 True
     )
-    result = await _ssh_exec(req)
+    result = await _ssh_exec(req, session=session)
     data = result.model_dump(mode="json")
     # 補充 reason 給前端顯示（AI 提供的說明）
     data["reason"] = str(args.get("reason", "未提供原因"))
@@ -296,7 +301,12 @@ async def _execute_ssh_tool(args: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-async def chat(message: str | None = None, history: list[dict] | None = None) -> ChatResponse:
+async def chat(
+    message: str | None = None,
+    history: list[dict] | None = None,
+    *,
+    session: Session | None = None,
+) -> ChatResponse:
     """單次 AI 對話，支援 Tool Calling 及其接續。
 
     設計：
@@ -490,7 +500,7 @@ async def chat(message: str | None = None, history: list[dict] | None = None) ->
                 try:
                     # ssh_exec 是 async 操作（需要 HTTP + SSH 連線），走獨立路徑
                     if func_name == "ssh_exec":
-                        result = await _execute_ssh_tool(func_args)
+                        result = await _execute_ssh_tool(func_args, session=session)
                     else:
                         result = _execute_tool_sync(_snapshot, func_name, func_args)
                     

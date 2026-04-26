@@ -1,17 +1,21 @@
 """SSH 遠端執行服務
 
-流程：
-  1. 黑名單過濾（ssh_guard）
-  2. 若 require_confirm=True → 產生 pending token，等待使用者確認
-  3. 確認後（或直接執行時）：
-     a. POST /api/v1/login/access-token → 取得 Campus Cloud JWT
-     b. GET  /api/v1/resources/{vmid}   → 取得 VM IP
-     c. GET  /api/v1/resources/{vmid}/ssh-key → 取得 SSH private key
-     d. paramiko SSH 連線並執行指令
-  4. 回傳 SSHExecResult
+流程（兩條路徑）：
+  內部路徑（主後端內嵌模組，傳入 session）：
+      a. _resolve_vm_info_from_db → 直接查 DB 取 IP / SSH key
+      b. paramiko SSH 連線並執行指令
+  HTTP 回呼路徑（獨立 ai-pve-log 子服務，不傳 session）：
+      a. POST /api/v1/login/access-token → 取得 Campus Cloud JWT
+      b. GET  /api/v1/resources/{vmid}   → 取得 VM IP
+      c. GET  /api/v1/resources/{vmid}/ssh-key → 取得 SSH private key
+      d. paramiko SSH 連線並執行指令
+  共用流程：
+      1. 黑名單過濾（ssh_guard）
+      2. 若 require_confirm=True → 產生 pending token，等待使用者確認
+      3. 回傳 SSHExecResult
 
 設計重點：
-  - 憑證自動從 settings 讀取（FIRST_SUPERUSER / FIRST_SUPERUSER_PASSWORD）
+  - 內部路徑不依賴 AI_API_PUBLIC_BASE_URL，避免變數名稱衝突
   - pending token 存於內存 dict，TTL 5 分鐘（適合 dev 環境）
   - 使用 asyncio.to_thread 包裝同步 paramiko，不阻塞 event loop
 """
@@ -28,9 +32,14 @@ from typing import Any
 import httpx
 import paramiko
 
+from sqlmodel import Session
+
 from app.ai.pve_log.config import settings
 from app.ai.pve_log.schemas import SSHConfirmRequest, SSHExecRequest, SSHExecResult
 from app.ai.pve_log.ssh_guard import check_command
+from app.core.security import decrypt_value
+from app.repositories import resource as resource_repo
+from app.services.proxmox import proxmox_service
 
 logger = logging.getLogger(__name__)
 
@@ -189,11 +198,67 @@ def _ssh_exec_sync(
 
 
 # ---------------------------------------------------------------------------
+# 內部 VM 資訊解析（主後端內嵌模組用，不經 HTTP 回呼）
+# ---------------------------------------------------------------------------
+
+def _resolve_vm_info_from_db(session: Session, vmid: int) -> tuple[str, str]:
+    """從資料庫直接取得 VM IP 與 SSH private key。
+
+    回傳 (host_ip, private_key_pem)。
+    僅供主後端內部使用；獨立 ai-pve-log 子服務請沿用 HTTP 回呼路徑。
+    """
+    resource = resource_repo.get_resource_by_vmid(session=session, vmid=vmid)
+    if not resource:
+        raise RuntimeError(f"VMID={vmid} 未在 Campus Cloud 資料庫中登記。")
+
+    host = (resource.ip_address or "").strip()
+    if not host:
+        # 對齊 /resources/{vmid} 行為：DB 無快取時，向 Proxmox 取即時 IP。
+        try:
+            vm_info = proxmox_service.find_resource(vmid)
+            vm_node = str(vm_info.get("node") or "")
+            vm_type = str(vm_info.get("type") or "")
+            if vm_node and vm_type in {"qemu", "lxc"}:
+                live_ip = proxmox_service.get_ip_address(vm_node, vmid, vm_type)
+                if live_ip:
+                    host = live_ip
+                    try:
+                        resource_repo.update_ip_address(
+                            session=session,
+                            vmid=vmid,
+                            ip_address=live_ip,
+                        )
+                    except Exception:
+                        session.rollback()
+                        logger.warning(
+                            "更新 VMID=%s IP 快取失敗（ip=%s）",
+                            vmid,
+                            live_ip,
+                            exc_info=True,
+                        )
+        except Exception as exc:
+            logger.warning("VMID=%s 即時 IP 解析失敗：%s", vmid, exc)
+
+    if not host:
+        raise RuntimeError(
+            f"VMID={vmid} 沒有可用的 IP 位址。"
+            "請確認 VM 正在運行且有設定網路，或 ip_address 快取已過期。"
+        )
+
+    if not resource.ssh_private_key_encrypted:
+        raise RuntimeError(
+            f"VMID={vmid} 未在 Campus Cloud 資料庫中登記 SSH key。"
+            "請先在 Campus Cloud 後端設定此 VM/LXC 的 SSH 金鑰。"
+        )
+    private_key = decrypt_value(resource.ssh_private_key_encrypted)
+    return host, private_key
+
+
+# ---------------------------------------------------------------------------
 # 主要公開函式
 # ---------------------------------------------------------------------------
 
-
-async def ssh_exec(req: SSHExecRequest) -> SSHExecResult:
+async def ssh_exec(req: SSHExecRequest, *, session: Session | None = None) -> SSHExecResult:
     """SSH 執行主入口。
 
     呼叫端透過 SSHExecRequest.require_confirm 控制是否需要二次確認：
@@ -226,10 +291,10 @@ async def ssh_exec(req: SSHExecRequest) -> SSHExecResult:
             confirm_token=token,
         )
 
-    return await _do_exec(req)
+    return await _do_exec(req, session=session)
 
 
-async def confirm_exec(confirm_req: SSHConfirmRequest) -> SSHExecResult:
+async def confirm_exec(confirm_req: SSHConfirmRequest, *, session: Session | None = None) -> SSHExecResult:
     """處理使用者確認（允許 or 拒絕）。"""
     token = confirm_req.token or confirm_req.confirm_token
     if not token:
@@ -280,36 +345,37 @@ async def confirm_exec(confirm_req: SSHConfirmRequest) -> SSHExecResult:
             )
         req = req.model_copy(update={"command": override_command})
 
-    return await _do_exec(req)
+    return await _do_exec(req, session=session)
 
 
-async def _do_exec(req: SSHExecRequest) -> SSHExecResult:
-    """實際執行 SSH 指令（通過安全檢查後）。"""
-    if not settings.campus_cloud_api_user or not settings.campus_cloud_api_password:
-        return SSHExecResult(
-            vmid=req.vmid,
-            host="",
-            ssh_user=req.ssh_user,
-            command=req.command,
-            error=(
-                "Campus Cloud 登入憑證未設定。"
-                "請確認 .env 中有 FIRST_SUPERUSER 與 FIRST_SUPERUSER_PASSWORD。"
-            ),
-        )
+async def _do_exec(req: SSHExecRequest, *, session: Session | None = None) -> SSHExecResult:
+    """實際執行 SSH 指令（通過安全檢查後）。
 
+    當 session 傳入時走內部 DB 查詢路徑（主後端內嵌模組用）；
+    未傳入時走 HTTP 回呼路徑（獨立 ai-pve-log 子服務用）。
+    """
     timeout = settings.ssh_timeout
     host = ""
 
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            # 1. 取得 JWT
-            token = await _get_campus_token(client)
-
-            # 2. 取得 VM IP
-            host = await _get_vm_ip(client, token, req.vmid)
-
-            # 3. 取得 SSH private key
-            private_key = await _get_ssh_private_key(client, token, req.vmid)
+        if session is not None:
+            host, private_key = _resolve_vm_info_from_db(session, req.vmid)
+        else:
+            if not settings.campus_cloud_api_user or not settings.campus_cloud_api_password:
+                return SSHExecResult(
+                    vmid=req.vmid,
+                    host="",
+                    ssh_user=req.ssh_user,
+                    command=req.command,
+                    error=(
+                        "Campus Cloud 登入憑證未設定。"
+                        "請確認 .env 中有 FIRST_SUPERUSER 與 FIRST_SUPERUSER_PASSWORD。"
+                    ),
+                )
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                token = await _get_campus_token(client)
+                host = await _get_vm_ip(client, token, req.vmid)
+                private_key = await _get_ssh_private_key(client, token, req.vmid)
 
         # 4. SSH 連線執行（同步操作放進 thread）
         logger.info(

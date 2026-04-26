@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     campus_cloud_api_public_base: str = Field(
         default="http://localhost:8000",
         alias="ai_api_public_base_url",
+        description="僅獨立 ai-pve-log 子服務使用；主後端內嵌模組走內部 DB 查詢",
     )
     campus_cloud_api_user: str = Field(
         default="",
