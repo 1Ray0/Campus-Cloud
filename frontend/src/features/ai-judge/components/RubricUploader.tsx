@@ -2,8 +2,8 @@
  * RubricUploader - Drag and drop file upload component for rubric documents
  */
 
-import { useCallback, useState } from "react"
 import { FileText, Upload, X } from "lucide-react"
+import { useCallback, useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -71,6 +71,7 @@ export function RubricUploader({
 
   return (
     <div className="space-y-4">
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: drag-and-drop zone requires static div with drag event handlers */}
       <div
         className={cn(
           "relative rounded-xl border-2 border-dashed p-8 transition-all",
@@ -128,11 +129,7 @@ export function RubricUploader({
       </div>
 
       {selectedFile && (
-        <Button
-          onClick={handleUpload}
-          disabled={isLoading}
-          className="w-full"
-        >
+        <Button onClick={handleUpload} disabled={isLoading} className="w-full">
           {isLoading ? (
             <>
               <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />

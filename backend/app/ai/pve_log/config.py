@@ -4,6 +4,7 @@ from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 from app.ai.system_config import system_ai_config, system_ai_env
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -29,6 +30,23 @@ class Settings(BaseSettings):
     collector_fetch_lxc_interfaces: bool = Field(default=True)
     collector_retry_attempts: int = Field(default=3, ge=1, le=10)
     collector_retry_backoff: float = Field(default=0.3, ge=0.0, le=10.0)
+
+    campus_cloud_api_public_base: str = Field(
+        default="http://localhost:8000",
+        alias="ai_api_public_base_url",
+        description="僅獨立 ai-pve-log 子服務使用；主後端內嵌模組走內部 DB 查詢",
+    )
+    campus_cloud_api_user: str = Field(
+        default="",
+        alias="first_superuser",
+    )
+    campus_cloud_api_password: str = Field(
+        default="",
+        alias="first_superuser_password",
+    )
+    ssh_insecure_host_key: bool = Field(default=True)
+    ssh_default_user: str = Field(default="root")
+    ssh_timeout: int = Field(default=30, ge=5, le=120)
 
     @property
     def section(self):
@@ -57,6 +75,10 @@ class Settings(BaseSettings):
     @property
     def vllm_max_tokens(self) -> int:
         return int(self.section.vllm.max_tokens)
+
+    @property
+    def campus_cloud_api_base(self) -> str:
+        return self.campus_cloud_api_public_base.rstrip("/") + "/api/v1"
 
 
 settings = Settings()

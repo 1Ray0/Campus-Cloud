@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -45,6 +46,7 @@ async def check_rate_limit_sliding_window(
     local window_start_ms = tonumber(ARGV[2])
     local limit = tonumber(ARGV[3])
     local ttl = tonumber(ARGV[4])
+    local member = ARGV[5]
 
     redis.call('ZREMRANGEBYSCORE', key, '-inf', window_start_ms)
     local current = redis.call('ZCARD', key)
@@ -53,7 +55,7 @@ async def check_rate_limit_sliding_window(
         return {0, current}
     end
 
-    redis.call('ZADD', key, now_ms, now_ms)
+    redis.call('ZADD', key, now_ms, member)
     redis.call('EXPIRE', key, ttl)
 
     return {1, current + 1}
@@ -68,6 +70,7 @@ async def check_rate_limit_sliding_window(
             window_start_ms,
             limit,
             window_seconds * 2,
+            f"{now_ms}:{uuid.uuid4().hex}",
         )
 
         allowed_int, current_count = result[0], result[1]
@@ -129,3 +132,100 @@ async def clear_user_rate_limit(redis: Redis | None, user_id: str) -> bool:
     except Exception as exc:
         logger.error("Failed to clear rate limit for user %s: %s", user_id, str(exc))
         return False
+
+
+async def check_rate_limit_by_key(
+    redis: Redis | None,
+    *,
+    key: str,
+    limit: int,
+    window_seconds: int,
+) -> tuple[bool, dict[str, Any]]:
+    """Generic sliding-window rate limit check keyed by an arbitrary string.
+
+    Use this for IP-based limits (e.g. login brute-force protection) or any
+    non-user-scoped throttling. Falls back to allow-all when Redis is unavailable.
+    """
+    now_ms = int(time.time() * 1000)
+    reset_at = datetime.fromtimestamp(
+        (now_ms + window_seconds * 1000) / 1000,
+        tz=timezone.utc,
+    )
+
+    if redis is None:
+        return True, {
+            "limit": limit,
+            "current": 0,
+            "remaining": limit,
+            "reset_at": reset_at,
+            "window_seconds": window_seconds,
+            "disabled": True,
+        }
+
+    window_start_ms = now_ms - (window_seconds * 1000)
+    redis_key = f"rate_limit:{key}"
+
+    lua_script = """
+    local key = KEYS[1]
+    local now_ms = tonumber(ARGV[1])
+    local window_start_ms = tonumber(ARGV[2])
+    local limit = tonumber(ARGV[3])
+    local ttl = tonumber(ARGV[4])
+    local member = ARGV[5]
+
+    redis.call('ZREMRANGEBYSCORE', key, '-inf', window_start_ms)
+    local current = redis.call('ZCARD', key)
+
+    if current >= limit then
+        return {0, current}
+    end
+
+    redis.call('ZADD', key, now_ms, member)
+    redis.call('EXPIRE', key, ttl)
+
+    return {1, current + 1}
+    """
+
+    try:
+        result = await redis.eval(
+            lua_script,
+            1,
+            redis_key,
+            now_ms,
+            window_start_ms,
+            limit,
+            window_seconds * 2,
+            f"{now_ms}:{uuid.uuid4().hex}",
+        )
+        allowed_int, current_count = result[0], result[1]
+        allowed = allowed_int == 1
+        info = {
+            "limit": limit,
+            "current": current_count,
+            "remaining": max(0, limit - current_count),
+            "reset_at": reset_at,
+            "window_seconds": window_seconds,
+        }
+        if not allowed:
+            logger.warning(
+                "Rate limit exceeded for key=%s: %d/%d in %ds",
+                key,
+                current_count,
+                limit,
+                window_seconds,
+            )
+        return allowed, info
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "Redis rate limit check failed for key=%s: %s. Allowing request.",
+            key,
+            exc,
+        )
+        return True, {
+            "limit": limit,
+            "current": 0,
+            "remaining": limit,
+            "reset_at": reset_at,
+            "window_seconds": window_seconds,
+            "error": str(exc),
+        }

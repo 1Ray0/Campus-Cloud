@@ -38,6 +38,34 @@ export const AuthSessionService = {
     _lastSuccessfulRefreshAt = 0
   },
 
+  /**
+   * Best-effort: notify the backend to revoke the current access + refresh
+   * token JTIs in Redis. Always swallows errors — the local clearTokens()
+   * call below is the source of truth for the client-side session state.
+   */
+  async revokeTokens(): Promise<void> {
+    const accessToken = this.getAccessToken()
+    if (!accessToken) return
+    const refreshToken = this.getRefreshToken()
+    try {
+      const base = (OpenAPI.BASE ?? "").replace(/\/+$/, "")
+      await fetch(`${base}/api/v1/login/logout`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify(
+          refreshToken ? { refresh_token: refreshToken } : {},
+        ),
+        // Don't keep the user waiting; this is fire-and-forget.
+        keepalive: true,
+      })
+    } catch {
+      // Intentional no-op: logout must always succeed locally.
+    }
+  },
+
   wasRefreshedRecently(windowMs = 3000) {
     return (
       _lastSuccessfulRefreshAt > 0 &&

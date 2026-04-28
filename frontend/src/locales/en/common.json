@@ -1,4 +1,12 @@
 {
+  "errorBoundary": {
+    "title": "Something went wrong",
+    "scopedTitle": "Failed to load {{scope}}",
+    "description": "An unexpected error occurred while rendering this view. You can try again, or reload the page if the problem persists.",
+    "details": "Error details",
+    "retry": "Try again",
+    "reload": "Reload page"
+  },
   "buttons": {
     "save": "Save",
     "cancel": "Cancel",

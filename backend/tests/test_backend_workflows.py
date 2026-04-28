@@ -1,3 +1,4 @@
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -5,9 +6,10 @@ from types import SimpleNamespace
 import pytest
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from app.core.security import encrypt_value
 from app.ai.pve_advisor.schemas import NodeCapacity, PlacementRequest
-from app.exceptions import BadRequestError, ProxmoxError, ProvisioningError
+from app.core.security import encrypt_value
+from app.exceptions import BadRequestError, ProvisioningError, ProxmoxError
+from app.infrastructure.proxmox import operations as proxmox_service
 from app.models import (
     ProxmoxConfig,
     ProxmoxNode,
@@ -16,6 +18,7 @@ from app.models import (
     SpecChangeRequest,
     SpecChangeRequestStatus,
     SpecChangeType,
+    SubnetConfig,
     User,
     UserRole,
     VMMigrationJob,
@@ -32,12 +35,15 @@ from app.schemas import (
     VMRequestCreate,
     VMRequestReview,
 )
-from app.infrastructure.proxmox import operations as proxmox_service
 from app.services.proxmox import provisioning_service
 from app.services.scheduling import support as scheduling_support
 from app.services.scheduling import vm_request_schedule_service
 from app.services.user import user_service
-from app.services.vm import spec_change_service, vm_request_placement_service, vm_request_service
+from app.services.vm import (
+    spec_change_service,
+    vm_request_placement_service,
+    vm_request_service,
+)
 
 
 @pytest.fixture()
@@ -102,6 +108,23 @@ def _seed_managed_storage(
             user_priority=user_priority,
         )
     )
+
+
+def _seed_subnet_config(session: Session) -> None:
+    """Seed the singleton SubnetConfig so provisioning_service.create_vm can
+    run its IP-management steps in tests that don't exercise IP allocation."""
+    if session.get(SubnetConfig, 1) is not None:
+        return
+    session.add(
+        SubnetConfig(
+            id=1,
+            cidr="10.0.0.0/24",
+            gateway="10.0.0.1",
+            bridge_name="vmbr0",
+            gateway_vm_ip="10.0.0.2",
+        )
+    )
+    session.commit()
 
 
 def test_vm_request_create_preserves_environment_type(
@@ -750,6 +773,7 @@ def test_create_vm_prefers_admin_selected_storage(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     user = _create_user(db)
+    _seed_subnet_config(db)
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
@@ -938,7 +962,7 @@ def test_process_due_request_starts_rebalances_active_window_and_migrates(
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.proxmox_service.list_node_storages",
-        lambda node: [{"storage": "local-lvm"}],
+        lambda node: [{"storage": "local-lvm", "shared": 1}],
     )
 
     def _migrate(source_node, target_node, vmid, resource_type, online=True, **kwargs):
@@ -1048,7 +1072,7 @@ def test_process_due_request_starts_provisions_new_active_request_on_rebalanced_
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.proxmox_service.list_node_storages",
-        lambda node: [{"storage": "local-lvm"}],
+        lambda node: [{"storage": "local-lvm", "shared": 1}],
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.audit_service.log_action",
@@ -1337,6 +1361,64 @@ def test_rebalance_active_window_enqueues_pending_migration_job(
     assert job.rebalance_epoch == 1
 
 
+def test_rebalance_active_window_requeues_after_interval_elapsed(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user = _create_user(db)
+    now = datetime.now(timezone.utc)
+    request = VMRequest(
+        user_id=user.id,
+        reason="Rebalance again after the active interval elapses.",
+        resource_type="vm",
+        hostname="requeue-active-vm",
+        cores=2,
+        memory=2048,
+        password=encrypt_value("strongpass123"),
+        storage="local-lvm",
+        environment_type="Queue Test",
+        template_id=610,
+        disk_size=20,
+        username="student",
+        status=VMRequestStatus.approved,
+        start_at=now - timedelta(hours=1),
+        end_at=now + timedelta(hours=1),
+        vmid=1610,
+        assigned_node="pve-a",
+        desired_node="pve-a",
+        actual_node="pve-a",
+        migration_status=VMMigrationStatus.idle,
+        rebalance_epoch=3,
+        last_rebalanced_at=now - timedelta(minutes=20),
+        created_at=now - timedelta(hours=2),
+    )
+    db.add(request)
+    db.commit()
+    db.refresh(request)
+
+    monkeypatch.setattr(
+        "app.services.scheduling.coordinator.engine",
+        db.get_bind(),
+    )
+    monkeypatch.setattr(
+        "app.services.scheduling.coordinator.vm_request_placement_service.rebalance_active_assignments",
+        lambda **kwargs: {
+            request.id: SimpleNamespace(
+                node="pve-a",
+                strategy="priority_dominant_share",
+                plan=SimpleNamespace(feasible=True),
+            ),
+        },
+    )
+
+    processed = vm_request_schedule_service._rebalance_active_window(now)
+
+    db.refresh(request)
+    assert processed == 1
+    assert request.rebalance_epoch == 4
+    assert request.last_rebalanced_at == now.replace(tzinfo=None)
+    assert request.desired_node == "pve-a"
+
+
 def test_process_due_request_starts_retries_pending_migration_job_until_limit(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1427,7 +1509,7 @@ def test_process_due_request_starts_retries_pending_migration_job_until_limit(
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.proxmox_service.list_node_storages",
-        lambda node: [{"storage": "local-lvm"}],
+        lambda node: [{"storage": "local-lvm", "shared": 1}],
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.proxmox_service.migrate_resource",
@@ -1817,6 +1899,139 @@ def test_migrate_request_to_desired_node_blocks_vm_with_passthrough(
     assert "passthrough devices" in request.migration_error
 
 
+def test_migrate_request_to_desired_node_blocks_gpu_vm(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user = _create_user(db)
+    request = VMRequest(
+        user_id=user.id,
+        reason="GPU VM should stay on its current node",
+        resource_type="vm",
+        hostname="gpu-vm",
+        cores=4,
+        memory=8192,
+        password=encrypt_value("strongpass123"),
+        storage="local-lvm",
+        environment_type="GPU Lab",
+        template_id=302,
+        disk_size=40,
+        username="student",
+        gpu_mapping_id="lab-gpu-01",
+        status=VMRequestStatus.approved,
+        vmid=1202,
+        assigned_node="pve-b",
+        desired_node="pve-b",
+        actual_node="pve-a",
+        migration_status=VMMigrationStatus.pending,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(request)
+    db.commit()
+    db.refresh(request)
+
+    monkeypatch.setattr(
+        "app.services.scheduling.coordinator.proxmox_service.migrate_resource",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("migrate_resource should not be called for GPU VM")
+        ),
+    )
+
+    result_node, migrated = vm_request_schedule_service._migrate_request_to_desired_node(
+        session=db,
+        request=request,
+        current_node="pve-a",
+        now=datetime.now(timezone.utc),
+        policy=vm_request_schedule_service._MigrationPolicy(
+            enabled=True,
+            max_per_rebalance=2,
+            min_interval_minutes=60,
+        ),
+        migrations_used=0,
+    )
+
+    db.refresh(request)
+    assert result_node == "pve-a"
+    assert migrated is False
+    assert request.actual_node == "pve-a"
+    assert request.desired_node == "pve-b"
+    assert request.migration_status == VMMigrationStatus.blocked
+    assert request.migration_error is not None
+    assert "GPU mapping" in request.migration_error
+
+
+def test_migrate_request_to_desired_node_blocks_non_shared_storage_vm(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user = _create_user(db)
+    request = VMRequest(
+        user_id=user.id,
+        reason="VM on node-local storage should not auto-migrate",
+        resource_type="vm",
+        hostname="local-storage-vm",
+        cores=2,
+        memory=4096,
+        password=encrypt_value("strongpass123"),
+        storage="local-lvm",
+        environment_type="Migration Guard",
+        template_id=303,
+        disk_size=32,
+        username="student",
+        status=VMRequestStatus.approved,
+        vmid=1203,
+        assigned_node="pve-b",
+        desired_node="pve-b",
+        actual_node="pve-a",
+        migration_status=VMMigrationStatus.pending,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(request)
+    db.commit()
+    db.refresh(request)
+
+    monkeypatch.setattr(
+        "app.services.scheduling.coordinator.proxmox_service.get_status",
+        lambda node, vmid, resource_type: {"status": "running"},
+    )
+    monkeypatch.setattr(
+        "app.services.scheduling.coordinator.proxmox_service.get_config",
+        lambda node, vmid, resource_type: {
+            "scsi0": "local-lvm:vm-1203-disk-0,size=32G",
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.scheduling.coordinator.proxmox_service.list_node_storages",
+        lambda node: [{"storage": "local-lvm", "shared": 0}],
+    )
+    monkeypatch.setattr(
+        "app.services.scheduling.coordinator.proxmox_service.migrate_resource",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("migrate_resource should not be called for non-shared storage VM")
+        ),
+    )
+
+    result_node, migrated = vm_request_schedule_service._migrate_request_to_desired_node(
+        session=db,
+        request=request,
+        current_node="pve-a",
+        now=datetime.now(timezone.utc),
+        policy=vm_request_schedule_service._MigrationPolicy(
+            enabled=True,
+            max_per_rebalance=2,
+            min_interval_minutes=60,
+        ),
+        migrations_used=0,
+    )
+
+    db.refresh(request)
+    assert result_node == "pve-a"
+    assert migrated is False
+    assert request.actual_node == "pve-a"
+    assert request.desired_node == "pve-b"
+    assert request.migration_status == VMMigrationStatus.blocked
+    assert request.migration_error is not None
+    assert "explicitly shared storage 'local-lvm'" in request.migration_error
+
+
 def test_migrate_request_to_desired_node_blocks_lxc_bind_mount(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1887,7 +2102,241 @@ def test_migrate_request_to_desired_node_blocks_lxc_bind_mount(
     assert request.desired_node == "pve-b"
     assert request.migration_status == VMMigrationStatus.blocked
     assert request.migration_error is not None
-    assert "bind mount" in request.migration_error
+    assert "LXC containers stay on their current node" in request.migration_error
+
+
+def test_rebalance_active_assignments_keeps_passthrough_vm_on_current_node(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime.now(timezone.utc)
+    request = VMRequest(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        reason="Pinned passthrough VM should stay put during active rebalance.",
+        resource_type="vm",
+        hostname="pinned-active-vm",
+        cores=4,
+        memory=4096,
+        password="encrypted",
+        storage="local-lvm",
+        environment_type="Pinned",
+        status=VMRequestStatus.approved,
+        start_at=now - timedelta(minutes=10),
+        end_at=now + timedelta(hours=1),
+        vmid=1801,
+        assigned_node="pve-a",
+        actual_node="pve-a",
+        created_at=now - timedelta(hours=1),
+    )
+
+    monkeypatch.setattr(
+        "app.services.vm.placement_service._build_rebalance_baseline_nodes",
+        lambda **kwargs: [
+            NodeCapacity(
+                node="pve-a",
+                status="online",
+                candidate=True,
+                guest_soft_limit=100,
+                total_cpu_cores=8,
+                allocatable_cpu_cores=5,
+                total_memory_bytes=32 * 1024**3,
+                allocatable_memory_bytes=16 * 1024**3,
+                total_disk_bytes=500 * 1024**3,
+                allocatable_disk_bytes=300 * 1024**3,
+            ),
+            NodeCapacity(
+                node="pve-b",
+                status="online",
+                candidate=True,
+                guest_soft_limit=100,
+                total_cpu_cores=8,
+                allocatable_cpu_cores=8,
+                total_memory_bytes=32 * 1024**3,
+                allocatable_memory_bytes=32 * 1024**3,
+                total_disk_bytes=500 * 1024**3,
+                allocatable_disk_bytes=500 * 1024**3,
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.scheduling.support.proxmox_service.get_config",
+        lambda node, vmid, resource_type: {
+            "hostpci0": "0000:65:00",
+            "scsi0": "local-lvm:vm-1801-disk-0,size=20G",
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.scheduling.support.proxmox_service.list_node_storages",
+        lambda node: [{"storage": "local-lvm"}],
+    )
+    monkeypatch.setattr(
+        "app.services.scheduling.support.proxmox_service.get_status",
+        lambda node, vmid, resource_type: {"status": "running"},
+    )
+
+    selections = vm_request_placement_service.rebalance_active_assignments(
+        session=db,
+        requests=[request],
+    )
+
+    selection = selections[request.id]
+    assert selection.node == "pve-a"
+
+
+def test_rebalance_active_assignments_keeps_lxc_on_current_node(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime.now(timezone.utc)
+    request = VMRequest(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        reason="LXC should stay on its current node during active rebalance.",
+        resource_type="lxc",
+        hostname="stable-active-lxc",
+        cores=2,
+        memory=2048,
+        password="encrypted",
+        storage="local-lvm",
+        environment_type="Container",
+        ostemplate="local:vztmpl/debian-12-standard.tar.zst",
+        rootfs_size=8,
+        status=VMRequestStatus.approved,
+        start_at=now - timedelta(minutes=10),
+        end_at=now + timedelta(hours=1),
+        vmid=1802,
+        assigned_node="pve-a",
+        actual_node="pve-a",
+        created_at=now - timedelta(hours=1),
+    )
+
+    monkeypatch.setattr(
+        "app.services.vm.placement_service._build_rebalance_baseline_nodes",
+        lambda **kwargs: [
+            NodeCapacity(
+                node="pve-a",
+                status="online",
+                candidate=True,
+                guest_soft_limit=100,
+                total_cpu_cores=8,
+                allocatable_cpu_cores=5,
+                total_memory_bytes=32 * 1024**3,
+                allocatable_memory_bytes=16 * 1024**3,
+                total_disk_bytes=500 * 1024**3,
+                allocatable_disk_bytes=300 * 1024**3,
+            ),
+            NodeCapacity(
+                node="pve-b",
+                status="online",
+                candidate=True,
+                guest_soft_limit=100,
+                total_cpu_cores=8,
+                allocatable_cpu_cores=8,
+                total_memory_bytes=32 * 1024**3,
+                allocatable_memory_bytes=32 * 1024**3,
+                total_disk_bytes=500 * 1024**3,
+                allocatable_disk_bytes=500 * 1024**3,
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.scheduling.support.proxmox_service.get_config",
+        lambda node, vmid, resource_type: {
+            "rootfs": "local-lvm:subvol-1802-disk-0,size=8G",
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.scheduling.support.proxmox_service.list_node_storages",
+        lambda node: [{"storage": "local-lvm"}],
+    )
+    monkeypatch.setattr(
+        "app.services.scheduling.support.proxmox_service.get_status",
+        lambda node, vmid, resource_type: {"status": "running"},
+    )
+
+    selections = vm_request_placement_service.rebalance_active_assignments(
+        session=db,
+        requests=[request],
+    )
+
+    selection = selections[request.id]
+    assert selection.node == "pve-a"
+
+
+def test_rebalance_active_assignments_keeps_non_shared_storage_vm_on_current_node(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime.now(timezone.utc)
+    request = VMRequest(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        reason="VM on non-shared storage should stay on its current node.",
+        resource_type="vm",
+        hostname="non-shared-active-vm",
+        cores=2,
+        memory=4096,
+        password="encrypted",
+        storage="local-lvm",
+        environment_type="Stable",
+        status=VMRequestStatus.approved,
+        start_at=now - timedelta(minutes=10),
+        end_at=now + timedelta(hours=1),
+        vmid=1803,
+        assigned_node="pve-a",
+        actual_node="pve-a",
+        created_at=now - timedelta(hours=1),
+    )
+
+    monkeypatch.setattr(
+        "app.services.vm.placement_service._build_rebalance_baseline_nodes",
+        lambda **kwargs: [
+            NodeCapacity(
+                node="pve-a",
+                status="online",
+                candidate=True,
+                guest_soft_limit=100,
+                total_cpu_cores=8,
+                allocatable_cpu_cores=5,
+                total_memory_bytes=32 * 1024**3,
+                allocatable_memory_bytes=16 * 1024**3,
+                total_disk_bytes=500 * 1024**3,
+                allocatable_disk_bytes=300 * 1024**3,
+            ),
+            NodeCapacity(
+                node="pve-b",
+                status="online",
+                candidate=True,
+                guest_soft_limit=100,
+                total_cpu_cores=8,
+                allocatable_cpu_cores=8,
+                total_memory_bytes=32 * 1024**3,
+                allocatable_memory_bytes=32 * 1024**3,
+                total_disk_bytes=500 * 1024**3,
+                allocatable_disk_bytes=500 * 1024**3,
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.scheduling.support.proxmox_service.get_config",
+        lambda node, vmid, resource_type: {
+            "scsi0": "local-lvm:vm-1803-disk-0,size=32G",
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.scheduling.support.proxmox_service.list_node_storages",
+        lambda node: [{"storage": "local-lvm", "shared": 0}],
+    )
+    monkeypatch.setattr(
+        "app.services.scheduling.support.proxmox_service.get_status",
+        lambda node, vmid, resource_type: {"status": "running"},
+    )
+
+    selections = vm_request_placement_service.rebalance_active_assignments(
+        session=db,
+        requests=[request],
+    )
+
+    selection = selections[request.id]
+    assert selection.node == "pve-a"
 
 
 def test_spec_change_review_stays_pending_when_apply_fails(
@@ -1942,6 +2391,7 @@ def test_create_vm_uses_template_node_and_normalizes_disk_size(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     user = _create_user(db)
+    _seed_subnet_config(db)
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
@@ -2035,6 +2485,7 @@ def test_create_vm_falls_back_when_requested_storage_is_unavailable(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     user = _create_user(db)
+    _seed_subnet_config(db)
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
@@ -2640,7 +3091,7 @@ def test_process_pending_migration_jobs_reclaims_expired_running_claim(
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.proxmox_service.list_node_storages",
-        lambda node: [{"storage": "local-lvm"}],
+        lambda node: [{"storage": "local-lvm", "shared": 1}],
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.proxmox_service.migrate_resource",
@@ -2681,6 +3132,81 @@ def test_process_pending_migration_jobs_reclaims_expired_running_claim(
     assert request.migration_status == VMMigrationStatus.completed
 
 
+def test_process_pending_migration_jobs_runs_claimed_jobs_in_parallel(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime.now(timezone.utc)
+    requests: list[VMRequest] = []
+    for index in range(2):
+        request = VMRequest(
+            id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            reason=f"Parallel migration {index}",
+            resource_type="vm",
+            hostname=f"parallel-{index}",
+            cores=2,
+            memory=2048,
+            password="encrypted",
+            storage="local-lvm",
+            environment_type="Parallel",
+            status=VMRequestStatus.approved,
+            start_at=now - timedelta(minutes=1),
+            end_at=now + timedelta(hours=1),
+            vmid=3000 + index,
+            assigned_node="pve-a",
+            desired_node="pve-b",
+            actual_node="pve-a",
+            migration_status=VMMigrationStatus.pending,
+            created_at=now,
+        )
+        job = VMMigrationJob(
+            request_id=request.id,
+            vmid=request.vmid,
+            source_node="pve-a",
+            target_node="pve-b",
+            status=VMMigrationJobStatus.pending,
+            rebalance_epoch=1,
+            requested_at=now,
+            updated_at=now,
+        )
+        db.add(request)
+        db.add(job)
+        requests.append(request)
+    db.commit()
+
+    thread_ids: list[int] = []
+    barrier = threading.Barrier(2)
+
+    def _fake_process_claimed_migration_job(**kwargs):
+        del kwargs
+        thread_ids.append(threading.get_ident())
+        barrier.wait(timeout=2)
+        return True
+
+    monkeypatch.setattr(
+        "app.services.scheduling.coordinator._process_claimed_migration_job",
+        _fake_process_claimed_migration_job,
+    )
+
+    migrations_used = vm_request_schedule_service._process_pending_migration_jobs(
+        session=db,
+        now=now,
+        policy=vm_request_schedule_service._MigrationPolicy(
+            enabled=True,
+            max_per_rebalance=2,
+            min_interval_minutes=0,
+            retry_limit=3,
+            worker_concurrency=2,
+            claim_timeout_seconds=300,
+            retry_backoff_seconds=120,
+        ),
+        active_requests=requests,
+    )
+
+    assert migrations_used == 2
+    assert len(set(thread_ids)) == 2
+
+
 def test_process_pending_migration_jobs_deletes_orphaned_jobs(
     db: Session,
 ) -> None:
@@ -2719,6 +3245,7 @@ def test_process_pending_migration_jobs_deletes_orphaned_jobs(
     db.add(request)
     db.add(job)
     db.commit()
+    job_id = job.id
 
     stale_request = request
     db.delete(request)
@@ -2740,7 +3267,7 @@ def test_process_pending_migration_jobs_deletes_orphaned_jobs(
     )
 
     assert migrations_used == 0
-    assert db.get(VMMigrationJob, job.id) is None
+    assert db.get(VMMigrationJob, job_id) is None
 
 
 def test_migrate_request_to_desired_node_refreshes_job_claim_while_waiting(
@@ -2806,7 +3333,7 @@ def test_migrate_request_to_desired_node_refreshes_job_claim_while_waiting(
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.proxmox_service.list_node_storages",
-        lambda node: [{"storage": "local-lvm"}],
+        lambda node: [{"storage": "local-lvm", "shared": 1}],
     )
     monkeypatch.setattr(
         "app.services.scheduling.coordinator.proxmox_service.find_resource",

@@ -19,9 +19,9 @@ app = FastAPI(
     title="Campus PVE Log — 批量系統資料分析服務",
     description=(
         "透過 PVE REST API 批量收集所有節點、VM、LXC 的系統資料，"
-        "並提供 AI 自然語言查詢介面（Tool Calling）。\n\n"
-        "**主要端點：**\n"
-        "- `POST /api/v1/chat` — AI 自然語言查詢（Tool Calling）\n"
+        "並提供 AI 自然語言查詢介面（Tool Calling）與 SSH 遠端執行功能。\n\n"
+        "**PVE 查詢端點：**\n"
+        "- `POST /api/v1/chat` — AI 自然語言查詢（Tool Calling，支援 SSH 執行）\n"
         "- `GET /api/v1/snapshot` — 一次取得所有資料（批量分析入口）\n"
         "- `GET /api/v1/nodes` — 節點清單\n"
         "- `GET /api/v1/resources` — VM/LXC 摘要\n"
@@ -29,9 +29,15 @@ app = FastAPI(
         "- `GET /api/v1/resource-configs` — 設定檔\n"
         "- `GET /api/v1/storage` — 儲存空間\n"
         "- `GET /api/v1/reference` — PVE API 可取得資料說明表\n\n"
+        "**SSH 遠端執行端點：**\n"
+        "- `POST /api/v1/ssh/exec` — SSH 進入 VM/LXC 執行指令（含雙重安全機制）\n"
+        "- `POST /api/v1/ssh/confirm` — 確認或拒絕 AI 請求的 SSH 執行\n\n"
+        "**SSH 安全機制：**\n"
+        "1. 黑名單過濾（`rm -rf`、`mkfs`、`shutdown` 等直接攔截）\n"
+        "2. 執行前確認（AI 呼叫時回傳 `pending=true`，需使用者 Allow/Deny）\n\n"
         "**測試前端：** [`/`](/) "
     ),
-    version="0.2.0",
+    version="0.3.0",
 )
 
 app.include_router(router)

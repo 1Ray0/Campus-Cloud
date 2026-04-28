@@ -10,11 +10,19 @@ from app.api.deps import (
 )
 from app.core.security import decrypt_value
 from app.exceptions import ProxmoxError
-from app.schemas import Message, NodeSchema, ResourcePublic, SSHKeyResponse
-from app.schemas.resource import ExtendSessionResponse, SessionStatusResponse
-from app.services.proxmox import proxmox_service
-from app.services.resource import resource_service
+from app.infrastructure.worker import submit_sync
+from app.models import DeletionRequestStatus
 from app.repositories import resource as resource_repo
+from app.schemas import NodeSchema, ResourcePublic, SSHKeyResponse
+from app.schemas.deletion_request import DeletionRequestCreated
+from app.schemas.resource import (
+    BatchActionRequest,
+    BatchActionResponse,
+    ExtendSessionResponse,
+    SessionStatusResponse,
+)
+from app.services.proxmox import proxmox_service
+from app.services.resource import deletion_service, resource_service
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +49,22 @@ def list_resources(
 def list_my_resources(session: SessionDep, current_user: CurrentUser):
     return resource_service.list_by_user(
         session=session, user_id=current_user.id
+    )
+
+
+@router.post("/batch", response_model=BatchActionResponse)
+def batch_action(
+    body: BatchActionRequest,
+    session: SessionDep,
+    current_user: CurrentUser,
+):
+    """Batch VM/LXC operations: start, stop, shutdown, reboot, reset, delete."""
+    return resource_service.batch_action(
+        session=session,
+        vmids=body.vmids,
+        action=body.action,
+        user_id=current_user.id,
+        is_admin=current_user.is_superuser,
     )
 
 
@@ -136,7 +160,7 @@ def reset_resource(
     )
 
 
-@router.delete("/{vmid}")
+@router.delete("/{vmid}", response_model=DeletionRequestCreated, status_code=202)
 def delete_resource(
     vmid: int,
     session: SessionDep,
@@ -145,13 +169,39 @@ def delete_resource(
     purge: bool = True,
     force: bool = False,
 ):
-    return resource_service.delete(
+    """將刪除請求加入佇列，立即 202 回應，並在背景馬上開始執行。
+
+    - 主路徑：API 寫入 DeletionRequest 後，立即 fire-and-forget 一個背景 task
+      呼叫 ``deletion_service.process_one_request``，無需等 scheduler tick。
+    - 兜底：scheduler 每隔 ``SCHEDULER_POLL_SECONDS`` 仍會掃描 pending request，
+      涵蓋 server restart / 背景任務失敗的情況。
+    """
+    req = deletion_service.create_deletion_request(
         session=session,
+        user_id=current_user.id,
         vmid=vmid,
         resource_info=resource_info,
-        user_id=current_user.id,
         purge=purge,
         force=force,
+    )
+    # Only kick the background task for freshly queued requests; if an existing
+    # pending/running request was returned (deduplication), it's already being
+    # handled.
+    if req.status == DeletionRequestStatus.pending:
+        submit_sync(
+            deletion_service.process_one_request,
+            req.id,
+            name=f"delete_resource:{vmid}",
+            task_id=str(req.id),
+            # Retries are handled inside process_one_request itself; no
+            # need for the runner to retry on top of that.
+            max_retries=0,
+        )
+    return DeletionRequestCreated(
+        id=req.id,
+        vmid=req.vmid,
+        status=req.status,
+        message="Deletion request queued",
     )
 
 

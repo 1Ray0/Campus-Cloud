@@ -1,9 +1,20 @@
 import os
 from collections.abc import Generator
 
+# Disable background jobs that reach external systems (Proxmox API, etc.)
+# before any app module is imported — otherwise settings caches the default.
+# CI runners cannot reach Proxmox, so scheduler ticks would time out and
+# block TestClient startup.
+os.environ.setdefault("SCHEDULER_ENABLED", "false")
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
+
+# Manual smoke scripts that use a `test_` prefix for CLI ergonomics but are not
+# pytest tests. Excluding them prevents pytest from collecting their top-level
+# functions (which take positional CLI args, not fixtures).
+collect_ignore = ["test_ai_api.py"]
 
 from app.core.config import settings
 from app.core.db import engine, init_db
@@ -158,6 +169,34 @@ def _cleanup_test_data(session: Session) -> None:
         session.delete(user)
 
     session.commit()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _seed_first_superuser() -> None:
+    """Ensure FIRST_SUPERUSER exists and its password matches settings.
+
+    Runs once per session regardless of whether a test uses the `db` fixture.
+    If the superuser already exists but the stored password doesn't verify
+    against FIRST_SUPERUSER_PASSWORD (e.g. a shared dev DB), the hash is
+    refreshed so auth-dependent tests can log in deterministically.
+    """
+    from app.core.security import get_password_hash, verify_password
+
+    with Session(engine) as session:
+        init_db(session)
+        user = session.exec(
+            select(User).where(User.email == settings.FIRST_SUPERUSER)
+        ).first()
+        if user is not None:
+            pw_ok, _ = verify_password(
+                settings.FIRST_SUPERUSER_PASSWORD, user.hashed_password
+            )
+            if not pw_ok:
+                user.hashed_password = get_password_hash(
+                    settings.FIRST_SUPERUSER_PASSWORD
+                )
+                session.add(user)
+                session.commit()
 
 
 @pytest.fixture(scope="module")

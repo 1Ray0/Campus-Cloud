@@ -133,9 +133,7 @@ function Approvals() {
             <TabsTrigger value="rejected">
               {t("approvals:filters.rejected")}
             </TabsTrigger>
-            <TabsTrigger value="all">
-              {t("approvals:filters.all")}
-            </TabsTrigger>
+            <TabsTrigger value="all">{t("approvals:filters.all")}</TabsTrigger>
             <TabsTrigger value="batch">
               批量建立
               <BatchPendingCountBadge />

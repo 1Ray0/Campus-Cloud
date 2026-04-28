@@ -12,6 +12,7 @@ from app.schemas.pve import (
     PVE_API_REFERENCE,
 )
 from app.schemas.chat import ChatRequest, ChatResponse, ToolCallRecord
+from app.schemas.ssh import SSHExecRequest, SSHExecResult, SSHConfirmRequest
 
 __all__ = [
     "NodeInfo",
@@ -28,4 +29,7 @@ __all__ = [
     "ChatRequest",
     "ChatResponse",
     "ToolCallRecord",
+    "SSHExecRequest",
+    "SSHExecResult",
+    "SSHConfirmRequest",
 ]

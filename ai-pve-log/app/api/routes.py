@@ -20,6 +20,9 @@ from app.schemas import (
     SystemSnapshot,
     ApiEndpointReference,
     PVE_API_REFERENCE,
+    SSHExecRequest,
+    SSHExecResult,
+    SSHConfirmRequest,
 )
 from app.services.collector import collect_snapshot
 
@@ -235,7 +238,71 @@ async def post_chat(body: ChatRequest) -> ChatResponse:
     from app.services.chat import chat as _chat
 
     try:
-        return await _chat(body.message)
+        return await _chat(message=body.message, history=body.messages)
     except Exception as exc:
         logger.error("chat 發生未預期錯誤：%s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# SSH 遠端執行
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/ssh/exec",
+    response_model=SSHExecResult,
+    summary="SSH 遠端執行指令",
+    description=(
+        "透過 Campus Cloud API 取得 SSH key 後，SSH 進入指定 VM/LXC 執行指令。\n\n"
+        "**安全機制（雙重）：**\n"
+        "1. **黑名單過濾**：危險指令（`rm -rf`、`mkfs`、`shutdown` 等）立即攔截，"
+        "回傳 `blocked=true`。\n"
+        "2. **執行前確認**：設定 `require_confirm=true` 時（AI Tool 預設），"
+        "回傳 `pending=true` + `confirm_token`，"
+        "需再呼叫 `POST /api/v1/ssh/confirm` 確認後才實際執行。\n\n"
+        "**憑證來源**：自動讀取 `.env` 中的 `FIRST_SUPERUSER` 與 "
+        "`FIRST_SUPERUSER_PASSWORD`，無需手動輸入。\n\n"
+        "**支援指令類型**：任意 shell 指令、Python 腳本片段等。\n\n"
+        "範例指令：\n"
+        "- `df -h` — 磁碟使用狀況\n"
+        "- `free -m` — 記憶體使用\n"
+        "- `ps aux | grep python` — 查詢 Python 程序\n"
+        "- `python3 -c 'import sys; print(sys.version)'` — Python 版本\n"
+        "- `systemctl status nginx` — 服務狀態\n"
+        "- `journalctl -n 50 --no-pager` — 最新系統日誌"
+    ),
+    tags=["ssh"],
+)
+async def post_ssh_exec(body: SSHExecRequest) -> SSHExecResult:
+    from app.services.ssh_exec import ssh_exec as _ssh_exec
+
+    try:
+        return await _ssh_exec(body)
+    except Exception as exc:
+        logger.error("ssh_exec 發生未預期錯誤：%s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post(
+    "/ssh/confirm",
+    response_model=SSHExecResult,
+    summary="確認或拒絕 SSH 執行",
+    description=(
+        "當 `POST /api/v1/ssh/exec` 以 `require_confirm=true` 呼叫時，"
+        "會回傳 `pending=true` 與 `confirm_token`。\n\n"
+        "使用者確認後，呼叫此端點：\n"
+        "- `approved=true` → 實際執行並回傳結果\n"
+        "- `approved=false` → 取消執行\n\n"
+        "**Token TTL：5 分鐘**，過期後需重新發起請求。"
+    ),
+    tags=["ssh"],
+)
+async def post_ssh_confirm(body: SSHConfirmRequest) -> SSHExecResult:
+    from app.services.ssh_exec import confirm_exec as _confirm_exec
+
+    try:
+        return await _confirm_exec(body)
+    except Exception as exc:
+        logger.error("ssh_confirm 發生未預期錯誤：%s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))

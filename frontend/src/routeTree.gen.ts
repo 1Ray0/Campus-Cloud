@@ -20,6 +20,7 @@ import { Route as LayoutReverseProxyRouteImport } from './routes/_layout/reverse
 import { Route as LayoutResourcesCreateRouteImport } from './routes/_layout/resources-create'
 import { Route as LayoutResourcesRouteImport } from './routes/_layout/resources'
 import { Route as LayoutMyResourcesRouteImport } from './routes/_layout/my-resources'
+import { Route as LayoutJobsRouteImport } from './routes/_layout/jobs'
 import { Route as LayoutGroupsRouteImport } from './routes/_layout/groups'
 import { Route as LayoutGpuManagementRouteImport } from './routes/_layout/gpu-management'
 import { Route as LayoutFirewallRouteImport } from './routes/_layout/firewall'
@@ -36,15 +37,15 @@ import { Route as LayoutMyResourcesVmidRouteImport } from './routes/_layout/my-r
 import { Route as LayoutGroupsGroupIdRouteImport } from './routes/_layout/groups_.$groupId'
 import { Route as LayoutApprovalsRequestIdRouteImport } from './routes/_layout/approvals_.$requestId'
 import { Route as LayoutAdminMigrationJobsRouteImport } from './routes/_layout/admin.migration-jobs'
+import { Route as LayoutAdminIpManagementRouteImport } from './routes/_layout/admin.ip-management'
 import { Route as LayoutAdminGatewayRouteImport } from './routes/_layout/admin.gateway'
 import { Route as LayoutAdminDomainsRouteImport } from './routes/_layout/admin.domains'
+import { Route as LayoutAdminDeployLogsRouteImport } from './routes/_layout/admin.deploy-logs'
 import { Route as LayoutAdminConfigurationRouteImport } from './routes/_layout/admin.configuration'
 import { Route as LayoutAdminBatchProvisionReviewRouteImport } from './routes/_layout/admin.batch-provision-review'
 import { Route as LayoutAdminAuditLogsRouteImport } from './routes/_layout/admin.audit-logs'
 import { Route as LayoutAdminAiMonitoringRouteImport } from './routes/_layout/admin.ai-monitoring'
 import { Route as LayoutAdminAiManagementRouteImport } from './routes/_layout/admin.ai-management'
-import { Route as LayoutGroupsGroupIdAiPveMessageRouteImport } from './routes/_layout/groups_.$groupId_.ai-pve-message'
-import { Route as LayoutGroupsGroupIdAiJudgeRouteImport } from './routes/_layout/groups_.$groupId_.ai-judge'
 
 const SignupRoute = SignupRouteImport.update({
   id: '/signup',
@@ -98,6 +99,11 @@ const LayoutResourcesRoute = LayoutResourcesRouteImport.update({
 const LayoutMyResourcesRoute = LayoutMyResourcesRouteImport.update({
   id: '/my-resources',
   path: '/my-resources',
+  getParentRoute: () => LayoutRoute,
+} as any)
+const LayoutJobsRoute = LayoutJobsRouteImport.update({
+  id: '/jobs',
+  path: '/jobs',
   getParentRoute: () => LayoutRoute,
 } as any)
 const LayoutGroupsRoute = LayoutGroupsRouteImport.update({
@@ -183,6 +189,11 @@ const LayoutAdminMigrationJobsRoute =
     path: '/migration-jobs',
     getParentRoute: () => LayoutAdminRoute,
   } as any)
+const LayoutAdminIpManagementRoute = LayoutAdminIpManagementRouteImport.update({
+  id: '/ip-management',
+  path: '/ip-management',
+  getParentRoute: () => LayoutAdminRoute,
+} as any)
 const LayoutAdminGatewayRoute = LayoutAdminGatewayRouteImport.update({
   id: '/gateway',
   path: '/gateway',
@@ -191,6 +202,11 @@ const LayoutAdminGatewayRoute = LayoutAdminGatewayRouteImport.update({
 const LayoutAdminDomainsRoute = LayoutAdminDomainsRouteImport.update({
   id: '/domains',
   path: '/domains',
+  getParentRoute: () => LayoutAdminRoute,
+} as any)
+const LayoutAdminDeployLogsRoute = LayoutAdminDeployLogsRouteImport.update({
+  id: '/deploy-logs',
+  path: '/deploy-logs',
   getParentRoute: () => LayoutAdminRoute,
 } as any)
 const LayoutAdminConfigurationRoute =
@@ -220,18 +236,6 @@ const LayoutAdminAiManagementRoute = LayoutAdminAiManagementRouteImport.update({
   path: '/ai-management',
   getParentRoute: () => LayoutAdminRoute,
 } as any)
-const LayoutGroupsGroupIdAiPveMessageRoute =
-  LayoutGroupsGroupIdAiPveMessageRouteImport.update({
-    id: '/groups_/$groupId_/ai-pve-message',
-    path: '/groups/$groupId/ai-pve-message',
-    getParentRoute: () => LayoutRoute,
-  } as any)
-const LayoutGroupsGroupIdAiJudgeRoute =
-  LayoutGroupsGroupIdAiJudgeRouteImport.update({
-    id: '/groups_/$groupId_/ai-judge',
-    path: '/groups/$groupId/ai-judge',
-    getParentRoute: () => LayoutRoute,
-  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof LayoutIndexRoute
@@ -249,6 +253,7 @@ export interface FileRoutesByFullPath {
   '/firewall': typeof LayoutFirewallRoute
   '/gpu-management': typeof LayoutGpuManagementRoute
   '/groups': typeof LayoutGroupsRoute
+  '/jobs': typeof LayoutJobsRoute
   '/my-resources': typeof LayoutMyResourcesRoute
   '/resources': typeof LayoutResourcesRoute
   '/resources-create': typeof LayoutResourcesCreateRoute
@@ -259,16 +264,16 @@ export interface FileRoutesByFullPath {
   '/admin/audit-logs': typeof LayoutAdminAuditLogsRoute
   '/admin/batch-provision-review': typeof LayoutAdminBatchProvisionReviewRoute
   '/admin/configuration': typeof LayoutAdminConfigurationRoute
+  '/admin/deploy-logs': typeof LayoutAdminDeployLogsRoute
   '/admin/domains': typeof LayoutAdminDomainsRoute
   '/admin/gateway': typeof LayoutAdminGatewayRoute
+  '/admin/ip-management': typeof LayoutAdminIpManagementRoute
   '/admin/migration-jobs': typeof LayoutAdminMigrationJobsRoute
   '/approvals/$requestId': typeof LayoutApprovalsRequestIdRoute
   '/groups/$groupId': typeof LayoutGroupsGroupIdRoute
   '/my-resources/$vmid': typeof LayoutMyResourcesVmidRoute
   '/resources/$vmid': typeof LayoutResourcesVmidRoute
   '/admin/': typeof LayoutAdminIndexRoute
-  '/groups/$groupId/ai-judge': typeof LayoutGroupsGroupIdAiJudgeRoute
-  '/groups/$groupId/ai-pve-message': typeof LayoutGroupsGroupIdAiPveMessageRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
@@ -284,6 +289,7 @@ export interface FileRoutesByTo {
   '/firewall': typeof LayoutFirewallRoute
   '/gpu-management': typeof LayoutGpuManagementRoute
   '/groups': typeof LayoutGroupsRoute
+  '/jobs': typeof LayoutJobsRoute
   '/my-resources': typeof LayoutMyResourcesRoute
   '/resources': typeof LayoutResourcesRoute
   '/resources-create': typeof LayoutResourcesCreateRoute
@@ -295,16 +301,16 @@ export interface FileRoutesByTo {
   '/admin/audit-logs': typeof LayoutAdminAuditLogsRoute
   '/admin/batch-provision-review': typeof LayoutAdminBatchProvisionReviewRoute
   '/admin/configuration': typeof LayoutAdminConfigurationRoute
+  '/admin/deploy-logs': typeof LayoutAdminDeployLogsRoute
   '/admin/domains': typeof LayoutAdminDomainsRoute
   '/admin/gateway': typeof LayoutAdminGatewayRoute
+  '/admin/ip-management': typeof LayoutAdminIpManagementRoute
   '/admin/migration-jobs': typeof LayoutAdminMigrationJobsRoute
   '/approvals/$requestId': typeof LayoutApprovalsRequestIdRoute
   '/groups/$groupId': typeof LayoutGroupsGroupIdRoute
   '/my-resources/$vmid': typeof LayoutMyResourcesVmidRoute
   '/resources/$vmid': typeof LayoutResourcesVmidRoute
   '/admin': typeof LayoutAdminIndexRoute
-  '/groups/$groupId/ai-judge': typeof LayoutGroupsGroupIdAiJudgeRoute
-  '/groups/$groupId/ai-pve-message': typeof LayoutGroupsGroupIdAiPveMessageRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -323,6 +329,7 @@ export interface FileRoutesById {
   '/_layout/firewall': typeof LayoutFirewallRoute
   '/_layout/gpu-management': typeof LayoutGpuManagementRoute
   '/_layout/groups': typeof LayoutGroupsRoute
+  '/_layout/jobs': typeof LayoutJobsRoute
   '/_layout/my-resources': typeof LayoutMyResourcesRoute
   '/_layout/resources': typeof LayoutResourcesRoute
   '/_layout/resources-create': typeof LayoutResourcesCreateRoute
@@ -334,16 +341,16 @@ export interface FileRoutesById {
   '/_layout/admin/audit-logs': typeof LayoutAdminAuditLogsRoute
   '/_layout/admin/batch-provision-review': typeof LayoutAdminBatchProvisionReviewRoute
   '/_layout/admin/configuration': typeof LayoutAdminConfigurationRoute
+  '/_layout/admin/deploy-logs': typeof LayoutAdminDeployLogsRoute
   '/_layout/admin/domains': typeof LayoutAdminDomainsRoute
   '/_layout/admin/gateway': typeof LayoutAdminGatewayRoute
+  '/_layout/admin/ip-management': typeof LayoutAdminIpManagementRoute
   '/_layout/admin/migration-jobs': typeof LayoutAdminMigrationJobsRoute
   '/_layout/approvals_/$requestId': typeof LayoutApprovalsRequestIdRoute
   '/_layout/groups_/$groupId': typeof LayoutGroupsGroupIdRoute
   '/_layout/my-resources_/$vmid': typeof LayoutMyResourcesVmidRoute
   '/_layout/resources_/$vmid': typeof LayoutResourcesVmidRoute
   '/_layout/admin/': typeof LayoutAdminIndexRoute
-  '/_layout/groups_/$groupId_/ai-judge': typeof LayoutGroupsGroupIdAiJudgeRoute
-  '/_layout/groups_/$groupId_/ai-pve-message': typeof LayoutGroupsGroupIdAiPveMessageRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -363,6 +370,7 @@ export interface FileRouteTypes {
     | '/firewall'
     | '/gpu-management'
     | '/groups'
+    | '/jobs'
     | '/my-resources'
     | '/resources'
     | '/resources-create'
@@ -373,16 +381,16 @@ export interface FileRouteTypes {
     | '/admin/audit-logs'
     | '/admin/batch-provision-review'
     | '/admin/configuration'
+    | '/admin/deploy-logs'
     | '/admin/domains'
     | '/admin/gateway'
+    | '/admin/ip-management'
     | '/admin/migration-jobs'
     | '/approvals/$requestId'
     | '/groups/$groupId'
     | '/my-resources/$vmid'
     | '/resources/$vmid'
     | '/admin/'
-    | '/groups/$groupId/ai-judge'
-    | '/groups/$groupId/ai-pve-message'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
@@ -398,6 +406,7 @@ export interface FileRouteTypes {
     | '/firewall'
     | '/gpu-management'
     | '/groups'
+    | '/jobs'
     | '/my-resources'
     | '/resources'
     | '/resources-create'
@@ -409,16 +418,16 @@ export interface FileRouteTypes {
     | '/admin/audit-logs'
     | '/admin/batch-provision-review'
     | '/admin/configuration'
+    | '/admin/deploy-logs'
     | '/admin/domains'
     | '/admin/gateway'
+    | '/admin/ip-management'
     | '/admin/migration-jobs'
     | '/approvals/$requestId'
     | '/groups/$groupId'
     | '/my-resources/$vmid'
     | '/resources/$vmid'
     | '/admin'
-    | '/groups/$groupId/ai-judge'
-    | '/groups/$groupId/ai-pve-message'
   id:
     | '__root__'
     | '/_layout'
@@ -436,6 +445,7 @@ export interface FileRouteTypes {
     | '/_layout/firewall'
     | '/_layout/gpu-management'
     | '/_layout/groups'
+    | '/_layout/jobs'
     | '/_layout/my-resources'
     | '/_layout/resources'
     | '/_layout/resources-create'
@@ -447,16 +457,16 @@ export interface FileRouteTypes {
     | '/_layout/admin/audit-logs'
     | '/_layout/admin/batch-provision-review'
     | '/_layout/admin/configuration'
+    | '/_layout/admin/deploy-logs'
     | '/_layout/admin/domains'
     | '/_layout/admin/gateway'
+    | '/_layout/admin/ip-management'
     | '/_layout/admin/migration-jobs'
     | '/_layout/approvals_/$requestId'
     | '/_layout/groups_/$groupId'
     | '/_layout/my-resources_/$vmid'
     | '/_layout/resources_/$vmid'
     | '/_layout/admin/'
-    | '/_layout/groups_/$groupId_/ai-judge'
-    | '/_layout/groups_/$groupId_/ai-pve-message'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -544,6 +554,13 @@ declare module '@tanstack/react-router' {
       path: '/my-resources'
       fullPath: '/my-resources'
       preLoaderRoute: typeof LayoutMyResourcesRouteImport
+      parentRoute: typeof LayoutRoute
+    }
+    '/_layout/jobs': {
+      id: '/_layout/jobs'
+      path: '/jobs'
+      fullPath: '/jobs'
+      preLoaderRoute: typeof LayoutJobsRouteImport
       parentRoute: typeof LayoutRoute
     }
     '/_layout/groups': {
@@ -658,6 +675,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAdminMigrationJobsRouteImport
       parentRoute: typeof LayoutAdminRoute
     }
+    '/_layout/admin/ip-management': {
+      id: '/_layout/admin/ip-management'
+      path: '/ip-management'
+      fullPath: '/admin/ip-management'
+      preLoaderRoute: typeof LayoutAdminIpManagementRouteImport
+      parentRoute: typeof LayoutAdminRoute
+    }
     '/_layout/admin/gateway': {
       id: '/_layout/admin/gateway'
       path: '/gateway'
@@ -670,6 +694,13 @@ declare module '@tanstack/react-router' {
       path: '/domains'
       fullPath: '/admin/domains'
       preLoaderRoute: typeof LayoutAdminDomainsRouteImport
+      parentRoute: typeof LayoutAdminRoute
+    }
+    '/_layout/admin/deploy-logs': {
+      id: '/_layout/admin/deploy-logs'
+      path: '/deploy-logs'
+      fullPath: '/admin/deploy-logs'
+      preLoaderRoute: typeof LayoutAdminDeployLogsRouteImport
       parentRoute: typeof LayoutAdminRoute
     }
     '/_layout/admin/configuration': {
@@ -707,20 +738,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAdminAiManagementRouteImport
       parentRoute: typeof LayoutAdminRoute
     }
-    '/_layout/groups_/$groupId_/ai-pve-message': {
-      id: '/_layout/groups_/$groupId_/ai-pve-message'
-      path: '/groups/$groupId/ai-pve-message'
-      fullPath: '/groups/$groupId/ai-pve-message'
-      preLoaderRoute: typeof LayoutGroupsGroupIdAiPveMessageRouteImport
-      parentRoute: typeof LayoutRoute
-    }
-    '/_layout/groups_/$groupId_/ai-judge': {
-      id: '/_layout/groups_/$groupId_/ai-judge'
-      path: '/groups/$groupId/ai-judge'
-      fullPath: '/groups/$groupId/ai-judge'
-      preLoaderRoute: typeof LayoutGroupsGroupIdAiJudgeRouteImport
-      parentRoute: typeof LayoutRoute
-    }
   }
 }
 
@@ -730,8 +747,10 @@ interface LayoutAdminRouteChildren {
   LayoutAdminAuditLogsRoute: typeof LayoutAdminAuditLogsRoute
   LayoutAdminBatchProvisionReviewRoute: typeof LayoutAdminBatchProvisionReviewRoute
   LayoutAdminConfigurationRoute: typeof LayoutAdminConfigurationRoute
+  LayoutAdminDeployLogsRoute: typeof LayoutAdminDeployLogsRoute
   LayoutAdminDomainsRoute: typeof LayoutAdminDomainsRoute
   LayoutAdminGatewayRoute: typeof LayoutAdminGatewayRoute
+  LayoutAdminIpManagementRoute: typeof LayoutAdminIpManagementRoute
   LayoutAdminMigrationJobsRoute: typeof LayoutAdminMigrationJobsRoute
   LayoutAdminIndexRoute: typeof LayoutAdminIndexRoute
 }
@@ -742,8 +761,10 @@ const LayoutAdminRouteChildren: LayoutAdminRouteChildren = {
   LayoutAdminAuditLogsRoute: LayoutAdminAuditLogsRoute,
   LayoutAdminBatchProvisionReviewRoute: LayoutAdminBatchProvisionReviewRoute,
   LayoutAdminConfigurationRoute: LayoutAdminConfigurationRoute,
+  LayoutAdminDeployLogsRoute: LayoutAdminDeployLogsRoute,
   LayoutAdminDomainsRoute: LayoutAdminDomainsRoute,
   LayoutAdminGatewayRoute: LayoutAdminGatewayRoute,
+  LayoutAdminIpManagementRoute: LayoutAdminIpManagementRoute,
   LayoutAdminMigrationJobsRoute: LayoutAdminMigrationJobsRoute,
   LayoutAdminIndexRoute: LayoutAdminIndexRoute,
 }
@@ -763,6 +784,7 @@ interface LayoutRouteChildren {
   LayoutFirewallRoute: typeof LayoutFirewallRoute
   LayoutGpuManagementRoute: typeof LayoutGpuManagementRoute
   LayoutGroupsRoute: typeof LayoutGroupsRoute
+  LayoutJobsRoute: typeof LayoutJobsRoute
   LayoutMyResourcesRoute: typeof LayoutMyResourcesRoute
   LayoutResourcesRoute: typeof LayoutResourcesRoute
   LayoutResourcesCreateRoute: typeof LayoutResourcesCreateRoute
@@ -773,8 +795,6 @@ interface LayoutRouteChildren {
   LayoutGroupsGroupIdRoute: typeof LayoutGroupsGroupIdRoute
   LayoutMyResourcesVmidRoute: typeof LayoutMyResourcesVmidRoute
   LayoutResourcesVmidRoute: typeof LayoutResourcesVmidRoute
-  LayoutGroupsGroupIdAiJudgeRoute: typeof LayoutGroupsGroupIdAiJudgeRoute
-  LayoutGroupsGroupIdAiPveMessageRoute: typeof LayoutGroupsGroupIdAiPveMessageRoute
 }
 
 const LayoutRouteChildren: LayoutRouteChildren = {
@@ -788,6 +808,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutFirewallRoute: LayoutFirewallRoute,
   LayoutGpuManagementRoute: LayoutGpuManagementRoute,
   LayoutGroupsRoute: LayoutGroupsRoute,
+  LayoutJobsRoute: LayoutJobsRoute,
   LayoutMyResourcesRoute: LayoutMyResourcesRoute,
   LayoutResourcesRoute: LayoutResourcesRoute,
   LayoutResourcesCreateRoute: LayoutResourcesCreateRoute,
@@ -798,8 +819,6 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutGroupsGroupIdRoute: LayoutGroupsGroupIdRoute,
   LayoutMyResourcesVmidRoute: LayoutMyResourcesVmidRoute,
   LayoutResourcesVmidRoute: LayoutResourcesVmidRoute,
-  LayoutGroupsGroupIdAiJudgeRoute: LayoutGroupsGroupIdAiJudgeRoute,
-  LayoutGroupsGroupIdAiPveMessageRoute: LayoutGroupsGroupIdAiPveMessageRoute,
 }
 
 const LayoutRouteWithChildren =

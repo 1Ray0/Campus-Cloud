@@ -105,7 +105,12 @@ export const AiJudgeService = {
     const rawToken = OpenAPI.TOKEN
     const token =
       typeof rawToken === "function"
-        ? await (rawToken as (o: unknown) => Promise<string>)({})
+        ? await (
+            rawToken as (o: { method: string; url: string }) => Promise<string>
+          )({
+            method: "POST",
+            url: "/api/v1/rubric/download-excel",
+          })
         : rawToken
 
     const base = OpenAPI.BASE || ""
@@ -176,18 +181,20 @@ export function getDetectableInfo(detectable: string) {
     case "auto":
       return {
         label: "可自動偵測",
-        className: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+        className:
+          "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
       }
     case "partial":
       return {
         label: "部分可偵測",
-        className: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400",
+        className:
+          "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400",
       }
-    case "manual":
     default:
       return {
         label: "需人工評閱",
-        className: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+        className:
+          "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
       }
   }
 }
@@ -199,12 +206,14 @@ export function getCheckedInfo(checked: boolean) {
   if (checked) {
     return {
       label: "已達成",
-      className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
+      className:
+        "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
     }
   }
 
   return {
     label: "未達成",
-    className: "bg-slate-100 text-slate-700 dark:bg-slate-900/30 dark:text-slate-300",
+    className:
+      "bg-slate-100 text-slate-700 dark:bg-slate-900/30 dark:text-slate-300",
   }
 }

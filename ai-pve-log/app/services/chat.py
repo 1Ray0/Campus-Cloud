@@ -1,15 +1,18 @@
-"""AI 對話服務 — 基於 Qwen3 Tool Calling
+"""AI 對話服務 — vLLM Tool Calling（支援 Gemma-4 / Qwen3 等模型）
 
 流程：
   1. 帶著工具定義向 vLLM 發出第一次請求
-  2. 若 AI 回傳 tool_calls，逐一執行（內部呼叫 collector，不走 HTTP）
+  2. 若 AI 回傳 tool_calls，逐一執行：
+     - PVE 工具：內部呼叫 collector，不走 HTTP
+     - ssh_exec：呼叫 Campus Cloud API 取得 SSH key，SSH 進入 VM 執行
   3. 將工具結果加回 messages，發出第二次請求取得最終回答
   4. 回傳 ChatResponse
 
 設計重點：
-  - 一次 chat 請求只收集一次 PVE 快照（lazy + cached），
-    多個 tool_calls 共用同一份快照，兼顧效率與一致性。
-  - 工具直接呼叫 collector 函式，不走 HTTP，無額外開銷。
+  - 一次 chat 請求只收集一次 PVE 快照（lazy），多個 tool_calls 共用同一份快照。
+  - ssh_exec 在 AI Tool 呼叫時直接執行（不走 pending 確認），黑名單仍有效。
+  - Gemma-4/Qwen3 的 <think> 與 tool call 標記會在第二次請求前清除，
+    避免 message history 污染導致 LLM 無法正確總結。
 """
 
 from __future__ import annotations
@@ -38,6 +41,17 @@ _SYSTEM_PROMPT = """\
 - 問題只涉及一種資源時，優先呼叫最精確的工具（例如只查儲存空間就用 get_storage，不要呼叫 get_resources）。
 - 需要特定 VM/LXC 詳情時才呼叫 get_resource_detail，並傳入正確的 vmid。
 - 若問題同時涉及多類資料，可以在同一輪呼叫多個工具。
+
+SSH 工具（ssh_exec）使用原則：
+- **優先使用 PVE API 工具**，PVE API 已可取得 CPU、記憶體、磁碟、網路的即時使用率。
+- 只有在 PVE API 無法取得足夠細節時，才使用 ssh_exec。
+- **適合 SSH 的場景**：程序列表（ps aux）、服務狀態（systemctl status）、
+  詳細日誌（journalctl）、Python 環境查詢、自訂腳本執行、
+  應用層資訊（nginx、docker、資料庫等）。
+- **指令風格**：保持簡單實用，優先使用單行指令；Python 片段以 python3 -c '...' 格式。
+- **必填 reason**：每次呼叫 ssh_exec 必須在 reason 欄位說明執行目的，
+  讓使用者在確認對話中做出知情決策。
+- ssh_exec 會先向使用者請求確認，被攔截的危險指令（如 rm -rf）無法執行。
 
 回覆格式：
 - 使用繁體中文，語氣清楚、簡潔。
@@ -143,6 +157,53 @@ _TOOLS: list[dict] = [
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "ssh_exec",
+            "description": (
+                "透過 SSH 連線到指定 VMID 的 VM/LXC，執行遠端指令取得內部系統細節或執行管理操作。"
+                "可執行任意 shell 指令或 Python 腳本片段。"
+                "PVE API 工具無法提供足夠細節時才使用（如程序列表、服務狀態、日誌、Python 環境等）。"
+                "執行前會向使用者請求確認；危險指令會被黑名單直接攔截。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "vmid": {
+                        "type": "integer",
+                        "description": "目標 VM 或 LXC 的 VMID",
+                    },
+                    "command": {
+                        "type": "string",
+                        "description": (
+                            "要在遠端執行的指令（保持簡單實用）。"
+                            "範例：ps aux | grep python、df -h、free -m、"
+                            "systemctl status nginx、journalctl -n 50 --no-pager、"
+                            "python3 -c 'import sys; print(sys.version)'"
+                        ),
+                    },
+                    "ssh_user": {
+                        "type": "string",
+                        "description": "SSH 登入帳號（預設 root）",
+                    },
+                    "ssh_port": {
+                        "type": "integer",
+                        "description": "SSH 埠號（預設 22）",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": (
+                            "說明為何需要執行此指令（必填），顯示給使用者作為確認依據。"
+                            "例如：查詢 VM 101 內的 Python 程序列表、"
+                            "取得 nginx 服務運行狀態"
+                        ),
+                    },
+                },
+                "required": ["vmid", "command", "reason"],
+            },
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -198,18 +259,45 @@ def _execute_tool_sync(snapshot, name: str, args: dict) -> Any:
         return {"error": f"未知工具：{name}"}
 
 
+async def _execute_ssh_tool(args: dict) -> dict:
+    """執行 ssh_exec 工具（async，需要等待 SSH 連線）。
+
+    重要設計：
+    - 在 AI Tool 呼叫時，不使用 require_confirm，直接執行取得真實資料
+    - LLM 必須拿到真實結果才能繼續總結，若回傳 pending=True 則 LLM 沒有資料可總結
+    - 黑名單依然產生作用（blocked=True 時回傳泽截說明）
+    - 安全性：黑名單（自動）+ 系統提示詞已告知 AI 描述指令目的
+    """
+    from app.schemas.ssh import SSHExecRequest as _SSHExecRequest
+    from app.services.ssh_exec import ssh_exec as _ssh_exec
+
+    req = _SSHExecRequest(
+        vmid=int(args["vmid"]),
+        command=str(args["command"]),
+        ssh_user=str(args.get("ssh_user", "root")),
+        ssh_port=int(args.get("ssh_port", 22)),
+        require_confirm=True,  # 支援中斷與接續確認，改為 True
+    )
+    result = await _ssh_exec(req)
+    data = result.model_dump(mode="json")
+    # 補充 reason 給前端顯示（AI 提供的說明）
+    data["reason"] = str(args.get("reason", ""))
+    return data
+
+
 # ---------------------------------------------------------------------------
 # 主對話函式
 # ---------------------------------------------------------------------------
 
 
-async def chat(message: str) -> ChatResponse:
-    """單次 AI 對話，支援 Tool Calling。
+async def chat(message: str | None = None, history: list[dict] | None = None) -> ChatResponse:
+    """單次 AI 對話，支援 Tool Calling 及其接續。
 
     設計：
     - 第一次 LLM 請求帶工具定義
     - 若 AI 呼叫工具，收集快照（僅一次），執行所有工具
-    - 第二次 LLM 請求取得最終回答
+    - 若有需要確認的工具（pending=True），則中斷並回傳給前端
+    - 否則進行第二次 LLM 請求取得最終回答
     """
     if not settings.vllm_base_url or not settings.vllm_model_name:
         return ChatResponse(
@@ -223,10 +311,13 @@ async def chat(message: str) -> ChatResponse:
         "Content-Type": "application/json",
     }
 
-    messages: list[dict] = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": message},
-    ]
+    messages: list[dict] = history or []
+    if not messages:
+        messages = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+        ]
+        if message:
+            messages.append({"role": "user", "content": message})
 
     tools_called: list[ToolCallRecord] = []
     _snapshot = None  # lazy，只有工具真的被呼叫時才收集
@@ -270,18 +361,40 @@ async def chat(message: str) -> ChatResponse:
             return ChatResponse(reply="", error="LLM 回傳空回應（choices 為空）")
 
         assistant_msg = choices[0].get("message") or {}
+
+        # ── Qwen3 tool call 標記清理 ───────────────────────────────────────
+        # Qwen3 模型有時會將工具呼叫標記（<|tool_call|>...<|/tool_call|>）
+        # 同時放入 content 和 tool_calls 欄位。
+        # 若 tool_calls 已存在， content 中的原始標記是兗餘資訊，
+        # 不清除會導致第二次請求時 LLM 混亂，無法總結。
+        if assistant_msg.get("tool_calls"):
+            import re as _re
+            raw_content = assistant_msg.get("content") or ""
+            # 移除 Qwen3 內部 think 區塊（<think>...</think>）
+            cleaned = _re.sub(r"<think>.*?</think>", "", raw_content, flags=_re.DOTALL)
+            # 移除各種工具呼叫標記格式
+            cleaned = _re.sub(r"<\|tool_call\|>.*?<\|/tool_call\|>", "", cleaned, flags=_re.DOTALL)
+            cleaned = _re.sub(r"<\|tool_call>.*?<tool_call\|>", "", cleaned, flags=_re.DOTALL)
+            cleaned = _re.sub(r'```json\s*\{\s*"tool_call".*?```', "", cleaned, flags=_re.DOTALL)
+            # 移除 Qwen3 另一種格式：<tool_call>...</tool_call>
+            cleaned = _re.sub(r"<tool_call>.*?</tool_call>", "", cleaned, flags=_re.DOTALL)
+            assistant_msg = {**assistant_msg, "content": cleaned.strip() or None}
+
         messages.append(assistant_msg)
 
         tool_calls = assistant_msg.get("tool_calls") or []
 
         # ── 執行工具 ─────────────────────────────────────────────────────
+        needs_confirmation = False
         if tool_calls:
-            # 只收集一次快照，所有工具共用
-            try:
-                _snapshot = await asyncio.to_thread(collect_snapshot)
-            except Exception as exc:
-                logger.error("收集 PVE 快照失敗：%s", exc)
-                return ChatResponse(reply="", error=f"收集 PVE 資料失敗：{exc}")
+            # ssh_exec 不需要 PVE 快照，只有其他工具才需要收集
+            needs_snapshot = any(tc["function"]["name"] != "ssh_exec" for tc in tool_calls)
+            if needs_snapshot:
+                try:
+                    _snapshot = await asyncio.to_thread(collect_snapshot)
+                except Exception as exc:
+                    logger.error("收集 PVE 快照失敗：%s", exc)
+                    return ChatResponse(reply="", error=f"收集 PVE 資料失敗：{exc}")
 
             for tc in tool_calls:
                 func_name: str = tc["function"]["name"]
@@ -293,14 +406,24 @@ async def chat(message: str) -> ChatResponse:
                     func_args = {}
 
                 logger.info("執行工具 %s，參數：%s", func_name, func_args)
-                tools_called.append(ToolCallRecord(name=func_name, args=func_args))
 
                 try:
-                    result = _execute_tool_sync(_snapshot, func_name, func_args)
+                    # ssh_exec 是 async 操作（需要 HTTP + SSH 連線），走獨立路徑
+                    if func_name == "ssh_exec":
+                        result = await _execute_ssh_tool(func_args)
+                    else:
+                        result = _execute_tool_sync(_snapshot, func_name, func_args)
+                    
+                    result_dict = result if isinstance(result, dict) else {}
+                    if result_dict.get("pending"):
+                        needs_confirmation = True
+
                     tool_content = json.dumps(result, ensure_ascii=False, default=str)
+                    tools_called.append(ToolCallRecord(name=func_name, args=func_args, result=result_dict))
                 except Exception as exc:
                     logger.error("工具 %s 執行失敗：%s", func_name, exc)
                     tool_content = json.dumps({"error": str(exc)}, ensure_ascii=False)
+                    tools_called.append(ToolCallRecord(name=func_name, args=func_args, result={"error": str(exc)}))
 
                 messages.append(
                     {
@@ -310,8 +433,8 @@ async def chat(message: str) -> ChatResponse:
                     }
                 )
 
-        # ── 第二次請求：取得最終回答（僅在有工具呼叫時） ────────────────
-        if tool_calls:
+        # ── 第二次請求：取得最終回答（僅在有工具呼叫時且不需等待確認） ────────────────
+        if tool_calls and not needs_confirmation:
             payload2: dict[str, Any] = {
                 "model": settings.vllm_model_name,
                 "messages": messages,
@@ -350,7 +473,19 @@ async def chat(message: str) -> ChatResponse:
             )
             if not choices2:
                 logger.error("vLLM 第二次回應 choices 為空：%s", data2)
+            
+            # 將最終回覆也加入 messages
+            if reply:
+                messages.append(choices2[0].get("message") or {"role": "assistant", "content": reply})
+
+        elif needs_confirmation:
+            reply = "有指令需要您的確認，請允許後繼續。"
         else:
             reply = assistant_msg.get("content") or ""
 
-    return ChatResponse(reply=reply, tools_called=tools_called)
+    return ChatResponse(
+        reply=reply, 
+        tools_called=tools_called, 
+        needs_confirmation=needs_confirmation, 
+        messages=messages
+    )

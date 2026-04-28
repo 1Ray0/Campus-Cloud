@@ -1,7 +1,6 @@
-import type { CancelablePromise } from "@/client"
+import type { CancelablePromise, VmRequestPublic } from "@/client"
 import { OpenAPI } from "@/client"
 import { request as __request } from "@/client/core/request"
-import type { VMRequestPublic } from "@/client"
 
 export type VmRequestReviewRuntimeResource = {
   vmid: number
@@ -69,7 +68,7 @@ export type VmRequestReviewNodeScore = {
 }
 
 export type VmRequestReviewContext = {
-  request: VMRequestPublic & {
+  request: VmRequestPublic & {
     migration_pinned?: boolean
     resource_warning?: string | null
     desired_node?: string | null

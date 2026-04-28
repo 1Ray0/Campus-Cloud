@@ -12,7 +12,12 @@ from app.repositories import batch_provision as batch_provision_repo
 from app.repositories import resource as resource_repo
 from app.repositories import vm_request as vm_request_repo
 from app.schemas import ResourcePublic
-from app.schemas.resource import ExtendSessionResponse, SessionStatusResponse
+from app.schemas.resource import (
+    BatchActionResponse,
+    BatchActionResultItem,
+    ExtendSessionResponse,
+    SessionStatusResponse,
+)
 from app.services.network import firewall_service
 from app.services.proxmox import proxmox_service
 from app.services.scheduling.recurrence import (
@@ -100,6 +105,9 @@ def _build_resource_public(
         expiry_date=db_resource.expiry_date if db_resource else None,
         ip_address=ip_address,
         ssh_public_key=db_resource.ssh_public_key if db_resource else None,
+        service_template_slug=(
+            db_resource.service_template_slug if db_resource else None
+        ),
         cpu=resource.get("cpu"),
         maxcpu=resource.get("maxcpu"),
         mem=resource.get("mem"),
@@ -290,6 +298,13 @@ def delete(
             reverse_proxy_service.remove_reverse_proxy_rules_for_vmid(session, vmid)
         except Exception as exc:
             logger.warning("Failed to clean up reverse proxy rules for VM %s: %s", vmid, exc)
+
+        # Release IP allocation
+        try:
+            from app.services.network import ip_management_service  # noqa: PLC0415
+            ip_management_service.release_ip(session, vmid)
+        except Exception as exc:
+            logger.warning("Failed to release IP for VM %s: %s", vmid, exc)
 
         # Unlink deleted VMID from historical batch tasks so group status won't
         # accidentally match a future resource that reuses the same VMID.
@@ -552,4 +567,78 @@ def get_session_status(
         should_warn=should_warn,
         # Only practice-quota sessions can be extended via the button.
         can_extend=running and auto_stop_reason == "practice_quota",
+    )
+
+
+def batch_action(
+    *,
+    session: Session,
+    vmids: list[int],
+    action: str,
+    user_id: uuid.UUID,
+    is_admin: bool,
+) -> BatchActionResponse:
+    """Batch control/delete for multiple resources."""
+    results: list[BatchActionResultItem] = []
+
+    for vmid in vmids:
+        try:
+            resource_info = proxmox_service.find_resource(vmid)
+
+            # Non-admin users must own the resource
+            if not is_admin:
+                db_resource = resource_repo.get_resource_by_vmid(
+                    session=session, vmid=vmid
+                )
+                if not db_resource or db_resource.user_id != user_id:
+                    results.append(
+                        BatchActionResultItem(
+                            vmid=vmid,
+                            success=False,
+                            message="Permission denied",
+                        )
+                    )
+                    continue
+
+            if action == "delete":
+                delete(
+                    session=session,
+                    vmid=vmid,
+                    resource_info=resource_info,
+                    user_id=user_id,
+                    purge=True,
+                    force=True,
+                )
+            else:
+                control(
+                    session=session,
+                    vmid=vmid,
+                    action=action,
+                    resource_info=resource_info,
+                    user_id=user_id,
+                )
+
+            results.append(
+                BatchActionResultItem(
+                    vmid=vmid,
+                    success=True,
+                    message=f"Resource {vmid} {action} succeeded",
+                )
+            )
+        except Exception as e:
+            logger.warning(f"Batch {action} failed for vmid={vmid}: {e}")
+            results.append(
+                BatchActionResultItem(
+                    vmid=vmid,
+                    success=False,
+                    message=str(e),
+                )
+            )
+
+    succeeded = sum(1 for r in results if r.success)
+    return BatchActionResponse(
+        total=len(results),
+        succeeded=succeeded,
+        failed=len(results) - succeeded,
+        results=results,
     )

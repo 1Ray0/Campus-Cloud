@@ -290,7 +290,7 @@
   });
 
   // ── 新增訊息氣泡 ─────────────────────────────────────────
-  function addMsg(role, text, toolsCalled) {
+  function addMsg(role, text, toolsCalled, needsConfirmation = false) {
     const wrap = document.createElement('div');
     wrap.className = `msg ${role}`;
 
@@ -339,6 +339,52 @@
       sec.appendChild(toggle);
       sec.appendChild(list);
       bubble.appendChild(sec);
+
+      // ── 確認按鈕（如果有需要確認的指令） ──
+      if (needsConfirmation) {
+        let confirmToken = null;
+        toolsCalled.forEach(tc => {
+          if (tc.result && tc.result.pending) {
+            confirmToken = tc.result.confirm_token;
+          }
+        });
+
+        if (confirmToken) {
+          const confirmWrap = document.createElement('div');
+          confirmWrap.style.marginTop = '12px';
+          confirmWrap.style.display = 'flex';
+          confirmWrap.style.gap = '8px';
+
+          const allowBtn = document.createElement('button');
+          allowBtn.textContent = '✅ 允許執行';
+          allowBtn.style.padding = '6px 12px';
+          allowBtn.style.background = 'var(--success)';
+          allowBtn.style.color = 'black';
+          allowBtn.style.border = 'none';
+          allowBtn.style.borderRadius = '5px';
+          allowBtn.style.cursor = 'pointer';
+          allowBtn.style.fontSize = '0.85rem';
+          allowBtn.style.fontWeight = 'bold';
+
+          const denyBtn = document.createElement('button');
+          denyBtn.textContent = '❌ 拒絕';
+          denyBtn.style.padding = '6px 12px';
+          denyBtn.style.background = 'var(--error)';
+          denyBtn.style.color = '#fff';
+          denyBtn.style.border = 'none';
+          denyBtn.style.borderRadius = '5px';
+          denyBtn.style.cursor = 'pointer';
+          denyBtn.style.fontSize = '0.85rem';
+          denyBtn.style.fontWeight = 'bold';
+
+          allowBtn.onclick = () => handleConfirm(confirmToken, true, allowBtn, denyBtn);
+          denyBtn.onclick = () => handleConfirm(confirmToken, false, allowBtn, denyBtn);
+
+          confirmWrap.appendChild(allowBtn);
+          confirmWrap.appendChild(denyBtn);
+          bubble.appendChild(confirmWrap);
+        }
+      }
     }
 
     wrap.appendChild(avatar);
@@ -369,16 +415,86 @@
     return wrap;
   }
 
+  // ── 處理確認指令 ─────────────────────────────────────────
+  async function handleConfirm(token, approved, btnAllow, btnDeny) {
+    btnAllow.disabled = true;
+    btnDeny.disabled = true;
+    btnAllow.textContent = approved ? '執行中...' : '允許執行';
+    btnDeny.textContent = !approved ? '處理中...' : '拒絕';
+    
+    try {
+      const res = await fetch('/api/v1/ssh/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm_token: token, approved: approved })
+      });
+      
+      const resultData = await res.json();
+      
+      if (!res.ok) {
+        addMsg('error', `確認請求失敗：${resultData.detail || res.statusText}`);
+        return;
+      }
+      
+      btnAllow.style.display = 'none';
+      btnDeny.style.display = 'none';
+      
+      // 接續對話
+      send(resultData);
+      
+    } catch (err) {
+      addMsg('error', `確認請求錯誤：${err.message}`);
+      btnAllow.disabled = false;
+      btnDeny.disabled = false;
+      btnAllow.textContent = '✅ 允許執行';
+      btnDeny.textContent = '❌ 拒絕';
+    }
+  }
+
+  let currentMessages = null;
+
   // ── 送出 ─────────────────────────────────────────────────
-  async function send() {
-    const msg = input.value.trim();
-    if (!msg || sendBtn.disabled) return;
+  async function send(resumeWithResult = null) {
+    let bodyData;
+    
+    // 如果是接續對話（帶有指令執行結果）
+    if (resumeWithResult && resumeWithResult.exit_code !== undefined) {
+      if (!currentMessages) {
+        addMsg('error', '找不到對話歷史，無法接續對話。');
+        return;
+      }
+      // 找到最後一個工具呼叫訊息，把結果寫進去
+      for (let i = currentMessages.length - 1; i >= 0; i--) {
+        if (currentMessages[i].role === 'tool') {
+          currentMessages[i].content = JSON.stringify(resumeWithResult);
+          break;
+        }
+      }
+      bodyData = { messages: currentMessages };
+    } else if (resumeWithResult && resumeWithResult.error) {
+      // 拒絕或錯誤的情況
+      if (!currentMessages) {
+        addMsg('error', '找不到對話歷史，無法接續對話。');
+        return;
+      }
+      for (let i = currentMessages.length - 1; i >= 0; i--) {
+        if (currentMessages[i].role === 'tool') {
+          currentMessages[i].content = JSON.stringify({ error: resumeWithResult.error });
+          break;
+        }
+      }
+      bodyData = { messages: currentMessages };
+    } else {
+      // 全新發問
+      const msg = input.value.trim();
+      if (!msg || sendBtn.disabled) return;
+      addMsg('user', msg);
+      input.value = '';
+      input.style.height = 'auto';
+      bodyData = { message: msg };
+    }
 
-    addMsg('user', msg);
-    input.value = '';
-    input.style.height = 'auto';
     sendBtn.disabled = true;
-
     const typing = addTyping();
 
     // AbortController：超過 150 秒自動中止（對應後端 chat_timeout=120 + 緩衝）
@@ -389,7 +505,7 @@
       const res = await fetch('/api/v1/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg }),
+        body: JSON.stringify(bodyData),
         signal: controller.signal,
       });
 
@@ -426,7 +542,11 @@
         return;
       }
 
-      addMsg('ai', data.reply || '（AI 沒有回傳任何內容）', data.tools_called);
+      if (data.messages) {
+        currentMessages = data.messages;
+      }
+
+      addMsg('ai', data.reply || '（AI 沒有回傳任何內容）', data.tools_called, data.needs_confirmation);
 
     } catch (err) {
       typing.remove();

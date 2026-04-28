@@ -3,8 +3,9 @@ from __future__ import annotations
 import io
 import select
 import time
+from collections.abc import Callable
 from types import SimpleNamespace
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 try:
     import paramiko
@@ -124,6 +125,7 @@ def exec_command_streaming(
     timeout: int = 900,
     on_stdout: Callable[[str], None] | None = None,
     decode_errors: str = "replace",
+    cancel_event: Any = None,
 ) -> tuple[int, str, str]:
     _, stdout_ch, stderr_ch = client.exec_command(command, timeout=timeout)
     channel = stdout_ch.channel
@@ -132,6 +134,12 @@ def exec_command_streaming(
     start = time.monotonic()
 
     while True:
+        if cancel_event is not None and cancel_event.is_set():
+            try:
+                channel.close()
+            except Exception:
+                pass
+            raise RuntimeError("SSH command cancelled by user")
         if time.monotonic() - start > timeout:
             channel.close()
             raise RuntimeError(f"SSH command timed out ({timeout}s)")

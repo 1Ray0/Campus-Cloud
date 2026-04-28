@@ -15,6 +15,7 @@ from app.models.batch_provision import BatchProvisionJobStatus, BatchProvisionTa
 from app.repositories import batch_provision as bp_repo
 from app.repositories import group as group_repo
 from app.schemas import LXCCreateRequest, VMCreateRequest
+from app.services.network import ip_management_service
 from app.services.proxmox import provisioning_service
 
 logger = logging.getLogger(__name__)
@@ -39,10 +40,24 @@ def submit_batch_job(
 
     The job (and its per-member tasks) are persisted but no provisioning is
     started — an admin must call :func:`approve_batch_job` first.
+
+    Validates that the IP subnet is configured and that there is enough free
+    capacity for every group member before persisting anything.
     """
     member_rows = group_repo.get_member_rows(session=session, group_id=group_id)
     if not member_rows:
         raise BadRequestError("群組沒有成員，無法執行批量建立")
+
+    # 防護：子網必須已設定
+    ip_management_service.ensure_subnet_configured(session)
+
+    # 檢查可用 IP 是否足夠
+    stats = ip_management_service.get_ip_stats(session)
+    if stats["available"] < len(member_rows):
+        raise BadRequestError(
+            f"可用 IP 不足：需要 {len(member_rows)} 個，"
+            f"但僅剩 {stats['available']} 個可用"
+        )
 
     member_user_ids = [row.user_id for row in member_rows]
 

@@ -69,6 +69,28 @@ function getSelectedSlots(
 }
 
 function PlacementStatusCell({ request }: { request: VMRequestPublic }) {
+  const hasSchedule = !!(request.start_at && request.end_at)
+  const isTerminal = ["approved", "rejected", "cancelled"].includes(
+    request.status,
+  )
+
+  const query = useQuery({
+    queryKey: [
+      "vm-request-availability-row",
+      request.id,
+      request.start_at,
+      request.end_at,
+    ],
+    queryFn: () =>
+      VmRequestAvailabilityService.getByRequestId({
+        requestId: request.id,
+        days: 7,
+        timezone: "Asia/Taipei",
+      }),
+    staleTime: 30_000,
+    enabled: hasSchedule && !isTerminal,
+  })
+
   if (request.status === "approved") {
     return (
       <div className="flex flex-col gap-1">
@@ -110,22 +132,6 @@ function PlacementStatusCell({ request }: { request: VMRequestPublic }) {
       </div>
     )
   }
-
-  const query = useQuery({
-    queryKey: [
-      "vm-request-availability-row",
-      request.id,
-      request.start_at,
-      request.end_at,
-    ],
-    queryFn: () =>
-      VmRequestAvailabilityService.getByRequestId({
-        requestId: request.id,
-        days: 7,
-        timezone: "Asia/Taipei",
-      }),
-    staleTime: 30_000,
-  })
 
   if (query.isLoading) {
     return (
@@ -224,7 +230,9 @@ export const createAdminRequestColumns = (
     header: "作業系統 / 模板",
     cell: ({ row }) => (
       <div className="min-w-[180px] max-w-[220px] overflow-hidden">
-        <div className="font-medium truncate">{formatTemplateLabel(row.original)}</div>
+        <div className="font-medium truncate">
+          {formatTemplateLabel(row.original)}
+        </div>
         <div className="mt-1 text-xs text-muted-foreground truncate">
           {row.original.os_info?.trim() || "未填寫作業系統資訊"}
         </div>
@@ -236,7 +244,9 @@ export const createAdminRequestColumns = (
     header: "表單資訊",
     cell: ({ row }) => (
       <div className="min-w-[190px] max-w-[220px] overflow-hidden text-sm">
-        <div className="truncate">{row.original.environment_type || "未設定環境類型"}</div>
+        <div className="truncate">
+          {row.original.environment_type || "未設定環境類型"}
+        </div>
         {row.original.resource_type === "vm" ? (
           <div className="mt-1 text-xs text-muted-foreground truncate">
             使用者名稱：{row.original.username || "未填寫"}

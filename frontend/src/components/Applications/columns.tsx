@@ -2,8 +2,8 @@ import type { ColumnDef } from "@tanstack/react-table"
 import type { TFunction } from "i18next"
 
 import type { VMRequestPublic } from "@/client"
-import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 
 function formatTemplateLabel(request: VMRequestPublic) {
   if (request.resource_type === "lxc") {
@@ -50,6 +50,8 @@ export const createMyRequestColumns = (
   options?: {
     onCancelRequest?: (request: VMRequestPublic) => void
     cancellingRequestId?: string | null
+    onRetryRequest?: (request: VMRequestPublic) => void
+    retryingRequestId?: string | null
   },
 ): ColumnDef<VMRequestPublic>[] => {
   const statusMap: Record<
@@ -103,7 +105,9 @@ export const createMyRequestColumns = (
       header: "作業系統 / 模板",
       cell: ({ row }) => (
         <div className="min-w-[180px] max-w-[220px] overflow-hidden">
-          <div className="font-medium truncate">{formatTemplateLabel(row.original)}</div>
+          <div className="font-medium truncate">
+            {formatTemplateLabel(row.original)}
+          </div>
           <div className="mt-1 text-xs text-muted-foreground truncate">
             {row.original.os_info?.trim() || "未填寫作業系統資訊"}
           </div>
@@ -187,24 +191,66 @@ export const createMyRequestColumns = (
       header: t("applications:table.actions"),
       cell: ({ row }) => {
         const request = row.original
-        if (request.status !== "pending" || !options?.onCancelRequest) {
+        const status = request.status
+        const canCancel =
+          status === "pending" ||
+          status === "approved" ||
+          status === "provisioning"
+        const canRetry = status === "approved"
+        const showCancel = canCancel && !!options?.onCancelRequest
+        const showRetry = canRetry && !!options?.onRetryRequest
+
+        if (!showCancel && !showRetry) {
           return <span className="text-muted-foreground">-</span>
         }
 
-        const isCancelling = options.cancellingRequestId === request.id
+        const isCancelling = options?.cancellingRequestId === request.id
+        const isRetrying = options?.retryingRequestId === request.id
 
         return (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={isCancelling}
-            onClick={() => options.onCancelRequest?.(request)}
-          >
-            {isCancelling
-              ? t("applications:actions.cancelling")
-              : t("applications:actions.cancelRequest")}
-          </Button>
+          <div className="flex items-center gap-2">
+            {showRetry && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={isRetrying || isCancelling}
+                onClick={() => options?.onRetryRequest?.(request)}
+                title={t("applications:actions.retryHint", {
+                  defaultValue: "重新觸發背景部署",
+                })}
+              >
+                {isRetrying
+                  ? t("applications:actions.retrying", {
+                      defaultValue: "重試中…",
+                    })
+                  : t("applications:actions.retryRequest", {
+                      defaultValue: "重試",
+                    })}
+              </Button>
+            )}
+            {showCancel && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={isCancelling || isRetrying}
+                onClick={() => options?.onCancelRequest?.(request)}
+                title={
+                  status === "provisioning"
+                    ? t("applications:actions.cancelHintProvisioning", {
+                        defaultValue:
+                          "嘗試取消（若部署已開始呼叫 Proxmox 可能仍會完成）",
+                      })
+                    : undefined
+                }
+              >
+                {isCancelling
+                  ? t("applications:actions.cancelling")
+                  : t("applications:actions.cancelRequest")}
+              </Button>
+            )}
+          </div>
         )
       },
     },

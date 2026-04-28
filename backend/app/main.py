@@ -10,13 +10,16 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.api.main import api_router
 from app.api.websocket import vnc_proxy
+from app.api.websocket.jobs import jobs_ws_proxy
 from app.api.websocket.terminal import terminal_proxy
 from app.core.config import settings
+from app.core.logging import configure_logging
+from app.core.metrics import PrometheusMiddleware, metrics_endpoint
 from app.core.request_context import RequestContextMiddleware
 from app.exceptions import AppError
 from app.infrastructure.redis import close_redis, init_redis
+from app.infrastructure.worker import init_background_runner, shutdown_background_runner
 from app.services.scheduling import vm_request_schedule_service
-
 
 _SECURITY_HEADERS: list[tuple[str, str]] = [
     ("X-Content-Type-Options", "nosniff"),
@@ -81,20 +84,29 @@ class SecurityHeadersMiddleware:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_redis()
-    stop_event = asyncio.Event()
-    scheduler_task = asyncio.create_task(
-        vm_request_schedule_service.run_scheduler(stop_event)
+    configure_logging(
+        level=getattr(settings, "LOG_LEVEL", "INFO"),
+        json_output=getattr(settings, "LOG_JSON", True),
     )
+    await init_redis()
+    init_background_runner()
+    stop_event = asyncio.Event()
+    scheduler_task: asyncio.Task[None] | None = None
+    if settings.SCHEDULER_ENABLED:
+        scheduler_task = asyncio.create_task(
+            vm_request_schedule_service.run_scheduler(stop_event)
+        )
     try:
         yield
     finally:
         stop_event.set()
-        scheduler_task.cancel()
-        try:
-            await scheduler_task
-        except asyncio.CancelledError:
-            pass
+        if scheduler_task is not None:
+            scheduler_task.cancel()
+            try:
+                await scheduler_task
+            except asyncio.CancelledError:
+                pass
+        await shutdown_background_runner()
         await close_redis()
 
 
@@ -117,6 +129,7 @@ app = FastAPI(
 )
 
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(PrometheusMiddleware)
 app.add_middleware(RequestContextMiddleware)
 
 if settings.all_cors_origins:
@@ -129,6 +142,7 @@ if settings.all_cors_origins:
     )
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
+app.add_route("/metrics", metrics_endpoint, methods=["GET"])
 
 
 @app.exception_handler(AppError)
@@ -153,3 +167,8 @@ async def websocket_vnc_proxy(
 @app.websocket("/ws/terminal/{vmid}")
 async def websocket_terminal_proxy(websocket: WebSocket, vmid: int, token: str = ""):
     await terminal_proxy(websocket, vmid, token=token)
+
+
+@app.websocket("/ws/jobs")
+async def websocket_jobs_proxy(websocket: WebSocket, token: str = ""):
+    await jobs_ws_proxy(websocket, token=token)

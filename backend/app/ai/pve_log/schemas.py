@@ -7,17 +7,25 @@ from pydantic import BaseModel, Field
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=2000)
+    message: str | None = Field(
+        default=None, description="使用者輸入的自然語言問題", max_length=2000
+    )
+    messages: list[dict] | None = Field(
+        default=None, description="完整的對話歷史（用於中斷與接續對話）"
+    )
 
 
 class ToolCallRecord(BaseModel):
     name: str
     args: dict[str, Any] = Field(default_factory=dict)
+    result: dict[str, Any] | None = Field(default=None)
 
 
 class ChatResponse(BaseModel):
     reply: str
     tools_called: list[ToolCallRecord] = Field(default_factory=list)
+    needs_confirmation: bool = Field(default=False)
+    messages: list[dict] = Field(default_factory=list)
     error: str | None = None
 
 
@@ -141,3 +149,45 @@ class SystemSnapshot(BaseModel):
     total_lxc: int
     running_vms: int
     running_lxc: int
+
+
+class SSHExecRequest(BaseModel):
+    vmid: int = Field(description="目標 VM 或 LXC 的 ID")
+    command: str = Field(description="要執行的指令內容", min_length=1)
+    ssh_user: str = Field(default="root", description="SSH 登入帳號（預設 root）")
+    ssh_port: int = Field(default=22, ge=1, le=65535, description="SSH 埠號（預設 22）")
+    require_confirm: bool = Field(
+        default=False, description="是否需要等待使用者確認（回傳 pending 狀態）"
+    )
+
+
+class SSHExecResult(BaseModel):
+    vmid: int = Field(default=0)
+    host: str = Field(default="")
+    ssh_user: str = Field(default="")
+    command: str = Field(default="")
+    stdout: str = Field(default="")
+    stderr: str = Field(default="")
+    exit_code: int = Field(default=0)
+    error: str | None = Field(default=None)
+    blocked: bool = Field(
+        default=False, description="是否因安全黑名單被攔截"
+    )
+    block_reason: str | None = Field(default=None)
+    pending: bool = Field(
+        default=False, description="是否在等待使用者確認"
+    )
+    confirm_token: str | None = Field(
+        default=None, description="等待確認時的 Token（TTL 5 分鐘）"
+    )
+
+
+class SSHConfirmRequest(BaseModel):
+    token: str = Field(description="執行時取得的 confirm_token")
+    confirm_token: str | None = Field(
+        default=None, description="相容欄位：可改以 confirm_token 傳入"
+    )
+    approved: bool = Field(description="是否允許執行")
+    command: str | None = Field(
+        default=None, description="可選：允許前覆寫要執行的指令內容"
+    )

@@ -15,6 +15,7 @@ import { useTranslation } from "react-i18next"
 import { z } from "zod"
 
 import { type ApiError, LxcService, VmService } from "@/client"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -40,9 +41,16 @@ import { Textarea } from "@/components/ui/textarea"
 import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { queryKeys } from "@/lib/queryKeys"
+import {
+  getQuickStartPreset,
+  pickQuickStartVmTemplateId,
+  type QuickStartMode,
+  type QuickStartPresetId,
+} from "@/lib/quickStart"
 import { toVmRequestCreateRequestBody } from "@/lib/resourcePayloads"
+import { pickMatchingOsTemplate } from "@/lib/serviceTemplates"
 import { cn } from "@/lib/utils"
-import { GpuService, type GPUSummary } from "@/services/gpu"
+import { type GPUSummary, GpuService } from "@/services/gpu"
 import { VmRequestsApi } from "@/services/vmRequests"
 import { handleError } from "@/utils"
 import { AiChatPanel, type AiPlanResult } from "./AiChatPanel"
@@ -101,7 +109,15 @@ type DesktopPanelFrame = {
 
 const AI_PANEL_BOTTOM_GAP = 16
 
-export function ApplicationRequestPage() {
+type ApplicationRequestPageProps = {
+  quickStartMode?: QuickStartMode
+  quickStartPreset?: QuickStartPresetId
+}
+
+export function ApplicationRequestPage({
+  quickStartMode,
+  quickStartPreset,
+}: ApplicationRequestPageProps) {
   const { t } = useTranslation([
     "applications",
     "resources",
@@ -122,9 +138,16 @@ export function ApplicationRequestPage() {
   const [resourceType, setResourceType] = useState<"lxc" | "vm">("lxc")
   const [serviceTemplateName, setServiceTemplateName] = useState("")
   const [serviceTemplateSlug, setServiceTemplateSlug] = useState("")
+  const [serviceTemplateScriptPath, setServiceTemplateScriptPath] = useState("")
   const aiColumnRef = useRef<HTMLElement | null>(null)
   const [desktopPanelFrame, setDesktopPanelFrame] =
     useState<DesktopPanelFrame | null>(null)
+  const activeQuickStart = useMemo(
+    () => getQuickStartPreset(quickStartPreset),
+    [quickStartPreset],
+  )
+  const isQuickStartAiMode =
+    Boolean(activeQuickStart) && quickStartMode === "ai"
 
   const formSchema = useMemo(
     () =>
@@ -353,13 +376,59 @@ export function ApplicationRequestPage() {
   )
 
   useEffect(() => {
+    if (!activeQuickStart) return
+
+    setShowTemplateSelector(false)
+    setServiceTemplateName("")
+    setServiceTemplateSlug("")
+    setServiceTemplateScriptPath("")
+    setResourceType(activeQuickStart.resourceType)
+
+    updateFormValue("resource_type", activeQuickStart.resourceType)
+    updateFormValue("mode", "immediate")
+    updateFormValue("immediate_no_end", true)
+    updateFormValue("start_at", "")
+    updateFormValue("end_at", "")
+    updateFormValue("gpu_mapping_id", "")
+    updateFormValue("template_id", undefined)
+    updateFormValue("cores", activeQuickStart.defaultCores)
+    updateFormValue("memory", activeQuickStart.defaultMemoryMb)
+    updateFormValue("disk_size", activeQuickStart.defaultDiskGb)
+    updateFormValue("username", activeQuickStart.defaultUsername)
+    updateFormValue("os_info", activeQuickStart.osInfo)
+    updateFormValue("reason", activeQuickStart.defaultReason)
+  }, [activeQuickStart, updateFormValue])
+
+  useEffect(() => {
+    if (!activeQuickStart || resourceType !== "vm" || !vmTemplates?.length)
+      return
+    if (watchedTemplateId) return
+
+    const matchedTemplateId = pickQuickStartVmTemplateId(
+      vmTemplates,
+      activeQuickStart,
+    )
+    if (matchedTemplateId) {
+      updateFormValue("template_id", matchedTemplateId)
+    }
+  }, [
+    activeQuickStart,
+    resourceType,
+    updateFormValue,
+    vmTemplates,
+    watchedTemplateId,
+  ])
+
+  useEffect(() => {
     if (resourceType !== "vm") return
     if (!canLoadGpuOptions && watchedGpuMappingId) {
       updateFormValue("gpu_mapping_id", "")
       return
     }
     if (!watchedGpuMappingId || !gpuOptions) return
-    const exists = gpuOptions.some((gpu) => gpu.mapping_id === watchedGpuMappingId)
+    const exists = gpuOptions.some(
+      (gpu) => gpu.mapping_id === watchedGpuMappingId,
+    )
     if (!exists) {
       updateFormValue("gpu_mapping_id", "")
     }
@@ -378,20 +447,33 @@ export function ApplicationRequestPage() {
       const payloadOptions = {
         lxcEnvironmentType:
           serviceTemplateName || t("resources:create.customSpec"),
-        vmEnvironmentType: t("resources:create.customSpec"),
+        vmEnvironmentType:
+          activeQuickStart?.resourceType === "vm"
+            ? activeQuickStart.defaultEnvironmentType
+            : t("resources:create.customSpec"),
         validationMessages: {
           lxcRequirements: t("validation:requirement.lxc"),
           vmRequirements: t("validation:requirement.vm"),
         },
       }
 
+      const enrichedData = {
+        ...data,
+        service_template_slug: serviceTemplateSlug || undefined,
+        service_template_script_path: serviceTemplateScriptPath || undefined,
+      }
+
       return VmRequestsApi.create({
-        requestBody: toVmRequestCreateRequestBody(data, payloadOptions),
+        requestBody: toVmRequestCreateRequestBody(enrichedData, payloadOptions),
       })
     },
     onSuccess: () => {
       showSuccessToast(t("messages:success.applicationSubmitted"))
       queryClient.invalidateQueries({ queryKey: queryKeys.vmRequests.all })
+      // Refresh the "creating placeholder" list on /resources so the user
+      // immediately sees the in-progress VM after auto-approve + background
+      // provision kicks in.
+      queryClient.invalidateQueries({ queryKey: ["pending-resources"] })
       navigate({ to: backPath })
     },
     onError: (err) => handleError.call(showErrorToast, err as ApiError),
@@ -421,6 +503,7 @@ export function ApplicationRequestPage() {
         if (prefill.service_template_slug) {
           setServiceTemplateSlug(prefill.service_template_slug)
           setServiceTemplateName(prefill.service_template_slug)
+          setServiceTemplateScriptPath(`ct/${prefill.service_template_slug}.sh`)
         }
       } else {
         if (prefill.disk_gb) updateFormValue("disk_size", prefill.disk_gb)
@@ -457,13 +540,13 @@ export function ApplicationRequestPage() {
     (template: FastTemplate) => {
       setServiceTemplateName(template.name || "")
       setServiceTemplateSlug(template.slug || "")
+      const method = template.install_methods?.[0]
+      setServiceTemplateScriptPath(
+        method?.script || (template.slug ? `ct/${template.slug}.sh` : ""),
+      )
       setResourceType("lxc")
       updateFormValue("resource_type", "lxc")
-      if (template.name) {
-        updateFormValue("hostname", normalizeHostname(template.name))
-      }
       // 帶入模板的預設資源值
-      const method = template.install_methods?.[0]
       if (method?.resources) {
         if (method.resources.cpu) updateFormValue("cores", method.resources.cpu)
         if (method.resources.ram)
@@ -471,9 +554,15 @@ export function ApplicationRequestPage() {
         if (method.resources.hdd)
           updateFormValue("rootfs_size", Math.max(method.resources.hdd, 8))
       }
+      // 自動挑選符合模板要求 OS / version 的 ostemplate volid
+      const volids = (lxcTemplates ?? []).map((t) => t.volid)
+      const picked = pickMatchingOsTemplate(volids, method?.resources)
+      if (picked) {
+        updateFormValue("ostemplate", picked)
+      }
       setShowTemplateSelector(false)
     },
-    [updateFormValue],
+    [lxcTemplates, updateFormValue],
   )
 
   const onSubmit = useCallback(
@@ -578,6 +667,58 @@ export function ApplicationRequestPage() {
     <div
       className={`mx-auto flex w-full ${showAiAssistant ? "max-w-[1180px]" : "max-w-[760px]"} flex-col gap-6`}
     >
+      {activeQuickStart && (
+        <section className="rounded-2xl border border-primary/20 bg-primary/5 px-5 py-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="secondary">快速入門</Badge>
+                <Badge variant="outline">
+                  {isQuickStartAiMode ? "AI 幫你選環境" : "標準模板"}
+                </Badge>
+                <Badge variant="outline">VM</Badge>
+              </div>
+              <div>
+                <h2 className="text-base font-semibold tracking-tight">
+                  {activeQuickStart.title}
+                </h2>
+                <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+                  已帶入預設設定，先填 VM 名稱與密碼即可。
+                </p>
+              </div>
+              <div className="hidden flex-wrap gap-2 text-xs text-muted-foreground">
+                <span className="rounded-full border border-border/60 bg-background/80 px-3 py-1">
+                  預設規格：{activeQuickStart.defaultCores} Core /{" "}
+                  {(activeQuickStart.defaultMemoryMb / 1024).toFixed(1)} GB RAM
+                  / {activeQuickStart.defaultDiskGb} GB Disk
+                </span>
+                <span className="rounded-full border border-border/60 bg-background/80 px-3 py-1">
+                  預設帳號：{activeQuickStart.defaultUsername}
+                </span>
+              </div>
+            </div>
+
+            <div className="hidden rounded-2xl border border-border/60 bg-background/80 px-4 py-3 text-sm text-muted-foreground lg:max-w-sm">
+              <div className="font-medium text-foreground">
+                目前只需要你補：
+              </div>
+              <div className="mt-2 leading-6">
+                1. VM 名稱
+                <br />
+                2. 登入密碼
+                <br />
+                3. 確認後送出申請
+              </div>
+              {isQuickStartAiMode && (
+                <div className="mt-3 text-xs leading-5 text-primary">
+                  AI 會自動根據這個情境建立建議並預填表單。
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
+
       <div
         className={`grid items-start gap-6 ${showAiAssistant ? "lg:grid-cols-[minmax(0,1fr)_400px] xl:grid-cols-[minmax(0,1fr)_420px]" : ""}`}
       >
@@ -696,7 +837,11 @@ export function ApplicationRequestPage() {
                         control={form.control}
                         name="ostemplate"
                         render={({ field }) => (
-                          <FormItem>
+                          <FormItem
+                            className={
+                              serviceTemplateSlug ? "hidden" : undefined
+                            }
+                          >
                             <FormLabel>
                               {t("resources:form.osTemplate")}{" "}
                               <span className="text-destructive">*</span>
@@ -766,6 +911,7 @@ export function ApplicationRequestPage() {
                               onClick={() => {
                                 setServiceTemplateName("")
                                 setServiceTemplateSlug("")
+                                setServiceTemplateScriptPath("")
                               }}
                             >
                               <X className="h-3.5 w-3.5" />
@@ -1215,11 +1361,13 @@ export function ApplicationRequestPage() {
                             請先選擇租借時段，再載入該時段可用的 GPU。
                           </p>
                         )}
-                        {canLoadGpuOptions && (!gpuOptions || gpuOptions.length === 0) && (
-                          <p className="mb-3 text-xs text-muted-foreground">
-                            此時段目前沒有可用 GPU，可改選其他時段或不使用 GPU。
-                          </p>
-                        )}
+                        {canLoadGpuOptions &&
+                          (!gpuOptions || gpuOptions.length === 0) && (
+                            <p className="mb-3 text-xs text-muted-foreground">
+                              此時段目前沒有可用 GPU，可改選其他時段或不使用
+                              GPU。
+                            </p>
+                          )}
                         <FormField
                           control={form.control}
                           name="gpu_mapping_id"
@@ -1227,7 +1375,11 @@ export function ApplicationRequestPage() {
                             <FormItem>
                               <FormLabel>選擇 GPU（可選）</FormLabel>
                               <Select
-                                disabled={!canLoadGpuOptions || !gpuOptions || gpuOptions.length === 0}
+                                disabled={
+                                  !canLoadGpuOptions ||
+                                  !gpuOptions ||
+                                  gpuOptions.length === 0
+                                }
                                 onValueChange={(value) =>
                                   field.onChange(
                                     value === "__none__" ? "" : value,
@@ -1257,14 +1409,25 @@ export function ApplicationRequestPage() {
                                       disabled={gpu.available_count <= 0}
                                     >
                                       <div className="flex items-center gap-2">
-                                        <span>{gpu.description || gpu.mapping_id}</span>
+                                        <span>
+                                          {gpu.description || gpu.mapping_id}
+                                        </span>
                                         {gpu.has_mdev && (
-                                          <span className="text-xs text-blue-500">vGPU</span>
+                                          <span className="text-xs text-blue-500">
+                                            vGPU
+                                          </span>
                                         )}
                                         {gpu.total_vram_mb > 0 && (
                                           <span className="text-xs text-muted-foreground">
-                                            ({gpu.total_vram_mb >= 1024 ? `${(gpu.total_vram_mb / 1024).toFixed(0)} GB` : `${gpu.total_vram_mb} MB`}
-                                            {gpu.has_mdev && gpu.used_vram_mb > 0 ? `, 已分配 ${gpu.used_vram_mb >= 1024 ? `${(gpu.used_vram_mb / 1024).toFixed(0)} GB` : `${gpu.used_vram_mb} MB`}` : ""})
+                                            (
+                                            {gpu.total_vram_mb >= 1024
+                                              ? `${(gpu.total_vram_mb / 1024).toFixed(0)} GB`
+                                              : `${gpu.total_vram_mb} MB`}
+                                            {gpu.has_mdev &&
+                                            gpu.used_vram_mb > 0
+                                              ? `, 已分配 ${gpu.used_vram_mb >= 1024 ? `${(gpu.used_vram_mb / 1024).toFixed(0)} GB` : `${gpu.used_vram_mb} MB`}`
+                                              : ""}
+                                            )
                                           </span>
                                         )}
                                         {!gpu.total_vram_mb && gpu.vram && (
@@ -1273,7 +1436,8 @@ export function ApplicationRequestPage() {
                                           </span>
                                         )}
                                         <span className="text-xs text-muted-foreground">
-                                          [{gpu.available_count}/{gpu.device_count} 可用]
+                                          [{gpu.available_count}/
+                                          {gpu.device_count} 可用]
                                         </span>
                                         {gpu.available_count <= 0 && (
                                           <span className="text-xs text-destructive">
@@ -1286,7 +1450,8 @@ export function ApplicationRequestPage() {
                                 </SelectContent>
                               </Select>
                               <p className="text-xs text-muted-foreground">
-                                GPU 會依所選時段重新計算可用性，送出前仍會再做一次檢查。
+                                GPU
+                                會依所選時段重新計算可用性，送出前仍會再做一次檢查。
                               </p>
                               <FormMessage />
                             </FormItem>
@@ -1482,8 +1647,12 @@ export function ApplicationRequestPage() {
               style={desktopPanelStyle}
             >
               <AiChatPanel
+                autoImportPlan={isQuickStartAiMode}
                 onImportPlan={handleImportPlan}
                 onImportReason={handleImportReason}
+                quickStartPrompt={
+                  isQuickStartAiMode ? activeQuickStart?.aiPrompt : undefined
+                }
                 recommendationContext={{
                   resource_type: resourceType,
                   mode: watchedMode,

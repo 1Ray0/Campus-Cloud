@@ -73,7 +73,19 @@ export const Route = createFileRoute("/login")({
 
 async function approveDeviceCode(deviceCode: string): Promise<boolean> {
   try {
-    const token = localStorage.getItem("access_token")
+    const resolvedToken =
+      typeof OpenAPI.TOKEN === "function"
+        ? await (
+            OpenAPI.TOKEN as (options: {
+              method: string
+              url: string
+            }) => Promise<string>
+          )({
+            method: "POST",
+            url: "/api/v1/desktop-client/auth/approve",
+          })
+        : (OpenAPI.TOKEN as string | undefined)
+    const token = resolvedToken || localStorage.getItem("access_token")
     if (!token) {
       console.warn("[approveDeviceCode] no access_token in localStorage")
       return false
@@ -203,6 +215,7 @@ function Login() {
         <div className="flex flex-col items-center gap-4 text-center py-8">
           <div className="rounded-full bg-green-100 p-3 dark:bg-green-900">
             <svg
+              aria-hidden="true"
               className="h-8 w-8 text-green-600 dark:text-green-400"
               fill="none"
               viewBox="0 0 24 24"
@@ -217,7 +230,9 @@ function Login() {
             </svg>
           </div>
           <h2 className="text-xl font-bold">
-            {t("auth:deviceApprovalSuccess.title", { defaultValue: "授權成功" })}
+            {t("auth:deviceApprovalSuccess.title", {
+              defaultValue: "授權成功",
+            })}
           </h2>
           <p className="text-muted-foreground">
             {t("auth:deviceApprovalSuccess.description", {
@@ -229,7 +244,9 @@ function Login() {
             className="mt-4 text-sm text-muted-foreground underline"
             onClick={() => navigate({ to: "/" })}
           >
-            {t("auth:deviceApprovalSuccess.goHome", { defaultValue: "前往主頁" })}
+            {t("auth:deviceApprovalSuccess.goHome", {
+              defaultValue: "前往主頁",
+            })}
           </button>
         </div>
       </AuthLayout>

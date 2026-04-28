@@ -8,16 +8,17 @@ from jwt.exceptions import InvalidTokenError
 from pydantic import ValidationError
 from sqlmodel import Session
 
-from app.api.deps.database import SessionDep, get_db
+from app.api.deps.database import SessionDep
+from app.core import security
 from app.core.authorizers import (
     require_admin_access,
     require_instructor_or_admin_access,
 )
-from app.core.permissions import Permission, require_permission
-from app.core import security
 from app.core.config import settings
 from app.core.db import engine
+from app.core.permissions import Permission, require_permission
 from app.exceptions import AuthenticationError
+from app.infrastructure.redis import get_redis, is_jti_revoked
 from app.models import User
 from app.schemas import TokenPayload
 
@@ -30,7 +31,7 @@ reusable_oauth2 = OAuth2PasswordBearer(
 TokenDep = Annotated[str, Depends(reusable_oauth2)]
 
 
-def get_current_user(session: SessionDep, token: TokenDep) -> User:
+async def get_current_user(session: SessionDep, token: TokenDep) -> User:
     # All failures here are authentication problems (bad/expired/revoked token,
     # missing or inactive user), so they must return 401 to trigger the
     # frontend refresh-token flow. Never raise 403 from this function — that
@@ -46,6 +47,12 @@ def get_current_user(session: SessionDep, token: TokenDep) -> User:
         raise AuthenticationError("Could not validate credentials")
     if token_data.type == "refresh":
         raise AuthenticationError("Refresh tokens cannot be used for API access")
+    # Per-token revocation via Redis blacklist (in addition to the
+    # token_version global kill switch enforced below).
+    if token_data.jti:
+        redis = await get_redis()
+        if await is_jti_revoked(redis, token_data.jti):
+            raise AuthenticationError("Token has been revoked")
     user = session.get(User, token_data.sub)
     if not user:
         raise AuthenticationError("User not found")

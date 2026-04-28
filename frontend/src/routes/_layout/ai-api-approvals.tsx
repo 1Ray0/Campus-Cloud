@@ -1,11 +1,10 @@
-import { redirect } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, redirect } from "@tanstack/react-router"
 import type { ColumnDef } from "@tanstack/react-table"
 import { Check, ClipboardCheck, X } from "lucide-react"
 import { useMemo, useState } from "react"
-import { Button } from "@/components/ui/button"
 import { DataTable } from "@/components/Common/DataTable"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogClose,
@@ -262,8 +261,7 @@ function AiApiApprovalsPage() {
       {
         id: "actions",
         header: "操作",
-        cell: ({ row }) =>
-          <ReviewActionCell item={row.original} />,
+        cell: ({ row }) => <ReviewActionCell item={row.original} />,
       },
     ],
     [],

@@ -1,4 +1,12 @@
 {
+  "errorBoundary": {
+    "title": "予期しないエラーが発生しました",
+    "scopedTitle": "{{scope}} を読み込めませんでした",
+    "description": "このビューの描画中にエラーが発生しました。再試行するか、ページを再読み込みしてください。",
+    "details": "エラーの詳細",
+    "retry": "再試行",
+    "reload": "ページを再読み込み"
+  },
   "buttons": {
     "save": "保存",
     "cancel": "キャンセル",

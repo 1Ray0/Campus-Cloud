@@ -228,22 +228,18 @@ export const AiUserUsageService = {
     })
   },
 
-  /** Proxy usage — requires the user's AI API Key as Bearer token */
-  async getMyProxyUsage(params: {
-    apiKey: string
+  /** Proxy usage — uses normal JWT auth inside the dashboard */
+  getMyProxyUsage(params: {
     start_date: string
     end_date: string
-  }): Promise<UsageStatsResponse> {
-    const qs = new URLSearchParams({
-      start_date: toStartOfDay(params.start_date)!,
-      end_date: toEndOfDay(params.end_date)!,
+  }): CancelablePromise<UsageStatsResponse> {
+    return __request(OpenAPI, {
+      method: "GET",
+      url: "/api/v1/ai-api/usage/proxy/my",
+      query: {
+        start_date: toStartOfDay(params.start_date),
+        end_date: toEndOfDay(params.end_date),
+      },
     })
-    const res = await fetch(`/api/v1/ai-proxy/usage/my?${qs.toString()}`, {
-      headers: { Authorization: `Bearer ${params.apiKey}` },
-    })
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`)
-    }
-    return res.json() as Promise<UsageStatsResponse>
   },
 }

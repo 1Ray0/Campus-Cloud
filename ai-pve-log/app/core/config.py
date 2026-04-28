@@ -53,5 +53,34 @@ class Settings(BaseSettings):
     # AI 對話逾時（秒），預留給快照收集 + LLM 兩次呼叫
     chat_timeout: int = Field(default=120, ge=10, le=600)
 
+    # ── Campus Cloud 後端 API（用於取得 SSH key）──────────────────────────
+    # 重用 AI_API_PUBLIC_BASE_URL（已在 .env 設定），補上 /api/v1 suffix
+    campus_cloud_api_public_base: str = Field(
+        default="http://localhost:8000",
+        alias="ai_api_public_base_url",
+    )
+    # 使用 FIRST_SUPERUSER / FIRST_SUPERUSER_PASSWORD 作為 Campus Cloud 登入憑證
+    campus_cloud_api_user: str = Field(
+        default="",
+        alias="first_superuser",
+    )
+    campus_cloud_api_password: str = Field(
+        default="",
+        alias="first_superuser_password",
+    )
+
+    # ── SSH 行為設定 ──────────────────────────────────────────────────────
+    # 是否停用 SSH host key 驗證（內網環境建議 true）
+    ssh_insecure_host_key: bool = Field(default=True)
+    # SSH 預設登入使用者
+    ssh_default_user: str = Field(default="root")
+    # SSH / HTTP 請求逾時（秒）
+    ssh_timeout: int = Field(default=30, ge=5, le=120)
+
+    @property
+    def campus_cloud_api_base(self) -> str:
+        """Campus Cloud 後端 API base URL（含 /api/v1）"""
+        return self.campus_cloud_api_public_base.rstrip("/") + "/api/v1"
+
 
 settings = Settings()
