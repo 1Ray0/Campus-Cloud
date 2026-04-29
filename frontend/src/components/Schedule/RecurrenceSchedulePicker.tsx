@@ -87,7 +87,17 @@ export function RecurrenceSchedulePicker({
       schedule_timezone: rule ? timezone : null,
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, mode, days, hour, minute, durationHours, timezone, advancedRule])
+  }, [
+    enabled,
+    mode,
+    days,
+    hour,
+    minute,
+    durationHours,
+    timezone,
+    advancedRule,
+    onChange,
+  ])
 
   return (
     <div className="space-y-4 rounded-md border p-4">
@@ -184,9 +194,7 @@ export function RecurrenceSchedulePicker({
                   max={59}
                   value={minute}
                   onChange={(e) =>
-                    setMinute(
-                      Math.max(0, Math.min(59, Number(e.target.value))),
-                    )
+                    setMinute(Math.max(0, Math.min(59, Number(e.target.value))))
                   }
                 />
               </div>

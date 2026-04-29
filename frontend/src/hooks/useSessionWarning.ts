@@ -11,7 +11,10 @@ import { useQueries, useQuery } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
 
 import { ResourcesService } from "@/client"
-import { type SessionStatus, SessionWarningService } from "@/services/sessionWarning"
+import {
+  type SessionStatus,
+  SessionWarningService,
+} from "@/services/sessionWarning"
 
 const POLL_INTERVAL_MS = 30_000
 

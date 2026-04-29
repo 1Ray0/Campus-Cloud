@@ -19,7 +19,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import useCustomToast from "@/hooks/useCustomToast"
-import { type SessionStatus, SessionWarningService } from "@/services/sessionWarning"
+import {
+  type SessionStatus,
+  SessionWarningService,
+} from "@/services/sessionWarning"
 
 export function SessionWarningDialog({
   status,
@@ -36,9 +39,7 @@ export function SessionWarningDialog({
   const mutation = useMutation({
     mutationFn: (vmid: number) => SessionWarningService.extend(vmid),
     onSuccess: (result) => {
-      toast.showSuccessToast(
-        `已延長 ${result.extended_minutes / 60} 小時`,
-      )
+      toast.showSuccessToast(`已延長 ${result.extended_minutes / 60} 小時`)
       qc.invalidateQueries({ queryKey: ["sessionStatus"] })
       onClose()
     },

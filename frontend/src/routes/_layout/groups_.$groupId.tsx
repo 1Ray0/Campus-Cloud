@@ -659,7 +659,8 @@ function BatchProvisionDialog({
             <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
               <p className="font-medium">送出後需經管理員審核</p>
               <p className="mt-0.5 text-xs">
-                此申請會先進入「待審核」，管理員通過後才會開始建立每位成員的資源。送出後可關閉視窗，建立進度可在群組頁面或 Approvals 查看。
+                此申請會先進入「待審核」，管理員通過後才會開始建立每位成員的資源。送出後可關閉視窗，建立進度可在群組頁面或
+                Approvals 查看。
               </p>
             </div>
 
@@ -900,10 +901,7 @@ function BatchProvisionDialog({
               </TabsContent>
             </Tabs>
 
-            <RecurrenceSchedulePicker
-              value={schedule}
-              onChange={setSchedule}
-            />
+            <RecurrenceSchedulePicker value={schedule} onChange={setSchedule} />
 
             <DialogFooter className="pt-2">
               <DialogClose asChild>
@@ -1055,10 +1053,7 @@ function BatchProvisionDialog({
             )}
 
             <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => handleOpenChange(false)}
-              >
+              <Button variant="outline" onClick={() => handleOpenChange(false)}>
                 {jobStatus?.status === "pending_review" ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4" />

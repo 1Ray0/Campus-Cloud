@@ -59,7 +59,11 @@ export function BatchProvisionReviewList({
   const qc = useQueryClient()
   const toast = useCustomToast()
 
-  const { data: jobs, isFetching, refetch } = useQuery({
+  const {
+    data: jobs,
+    isFetching,
+    refetch,
+  } = useQuery({
     queryKey: PENDING_QUERY_KEY,
     queryFn: () => GroupFeatureService.listPendingBatchJobs(),
     refetchInterval: 15_000,
@@ -183,8 +187,7 @@ function JobCard({
               <strong>{job.group_name ?? job.group_id.slice(0, 8)}</strong>
               {job.initiated_by_name && (
                 <>
-                  ・送出人 {job.initiated_by_name}（
-                  {job.initiated_by_email}）
+                  ・送出人 {job.initiated_by_name}（{job.initiated_by_email}）
                 </>
               )}
               ・{fmtDateTime(job.created_at)}
@@ -279,8 +282,7 @@ function JobCard({
 function SpecSection({ job }: { job: BatchJob }) {
   const spec: BatchJobSpec = job.spec ?? {}
   const memoryGb = spec.memory ? (spec.memory / 1024).toFixed(1) : null
-  const disk =
-    job.resource_type === "lxc" ? spec.rootfs_size : spec.disk_size
+  const disk = job.resource_type === "lxc" ? spec.rootfs_size : spec.disk_size
   return (
     <section className="space-y-2">
       <h3 className="flex items-center gap-2 text-sm font-semibold">
@@ -353,7 +355,9 @@ function ScheduleSection({
         {previewLoading ? (
           <p className="text-xs text-muted-foreground">計算中…</p>
         ) : previewWindows.length === 0 ? (
-          <p className="text-xs text-muted-foreground">無下次窗口（規則可能已過期）</p>
+          <p className="text-xs text-muted-foreground">
+            無下次窗口（規則可能已過期）
+          </p>
         ) : (
           <ol className="space-y-0.5 text-xs font-mono">
             {previewWindows.map(([start, end], i) => (
@@ -420,15 +424,7 @@ function MemberTable({ job }: { job: BatchJob }) {
   )
 }
 
-function Row({
-  k,
-  v,
-  mono,
-}: {
-  k: string
-  v: string
-  mono?: boolean
-}) {
+function Row({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   return (
     <div className="flex items-start justify-between gap-3 border-b border-border/40 py-1 last:border-0">
       <dt className="text-xs uppercase tracking-wider text-muted-foreground">
