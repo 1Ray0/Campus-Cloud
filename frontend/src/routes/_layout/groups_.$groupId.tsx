@@ -70,7 +70,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AiJudgeContent } from "@/features/ai-judge/components/AiJudgeContent"
 import { AiPveMessageContent } from "@/features/ai-pve-log/components/AiPveMessageContent"
 import { requireGroupManagerUser } from "@/features/auth/guards"
-import { GroupFeatureService } from "@/features/groups/api"
+import {
+  type TaskStatus,
+  GroupFeatureService,
+} from "@/features/groups/api"
 import { groupDetailQueryOptions } from "@/features/groups/queryOptions"
 import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -85,34 +88,9 @@ type CsvImportResult = {
   errors: string[]
 }
 
-type TaskStatus = "pending" | "running" | "completed" | "failed"
-
-type BatchTask = {
-  id: string
-  user_id: string
-  user_email: string | null
-  user_name: string | null
-  member_index: number
-  vmid: number | null
-  status: TaskStatus
-  error: string | null
-  started_at: string | null
-  finished_at: string | null
-}
-
-type BatchJob = {
-  id: string
-  group_id: string
-  resource_type: string
-  hostname_prefix: string
-  status: "pending" | "running" | "completed" | "failed"
-  total: number
-  done: number
-  failed_count: number
-  created_at: string
-  finished_at: string | null
-  tasks: BatchTask[]
-}
+// BatchTask / TaskStatus are imported from @/features/groups/api so the local
+// shape matches the API response (especially the wider BatchJobStatus union
+// that includes pending_review/approved/rejected/cancelled).
 
 type GroupMemberWithRuntimeStats = GroupMemberPublic & {
   vm_cpu_usage_pct?: number | null
@@ -535,7 +513,7 @@ function BatchProvisionDialog({
   })
 
   // 輪詢進度
-  const { data: jobStatus } = useQuery<BatchJob>({
+  const { data: jobStatus } = useQuery({
     queryKey: queryKeys.groups.batchJob(jobId ?? "pending"),
     queryFn: () =>
       GroupFeatureService.getBatchProvisionStatus({ jobId: jobId! }),

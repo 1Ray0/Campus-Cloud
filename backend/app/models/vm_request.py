@@ -5,6 +5,7 @@ import uuid
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Optional
 
+import sqlalchemy as sa
 from sqlmodel import Column, DateTime, Enum, Field, Relationship, SQLModel
 
 if TYPE_CHECKING:
@@ -124,7 +125,10 @@ class VMRequest(SQLModel, table=True):
     )
     batch_job_id: uuid.UUID | None = Field(
         default=None,
-        foreign_key="batch_provision_jobs.id",
+        sa_column=Column(
+            sa.ForeignKey("batch_provision_jobs.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
     )
 
     created_at: datetime = Field(
