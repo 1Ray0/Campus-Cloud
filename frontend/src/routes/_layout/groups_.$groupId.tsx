@@ -70,10 +70,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AiJudgeContent } from "@/features/ai-judge/components/AiJudgeContent"
 import { AiPveMessageContent } from "@/features/ai-pve-log/components/AiPveMessageContent"
 import { requireGroupManagerUser } from "@/features/auth/guards"
-import {
-  type TaskStatus,
-  GroupFeatureService,
-} from "@/features/groups/api"
+import { GroupFeatureService, type TaskStatus } from "@/features/groups/api"
 import { groupDetailQueryOptions } from "@/features/groups/queryOptions"
 import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
