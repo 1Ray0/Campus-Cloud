@@ -1,12 +1,19 @@
 ﻿import { net } from "electron";
 import { BusinessError, ResponseCode } from "../core/BusinessError";
 import Logger from "../core/Logger";
+import HttpErrorUtils from "../utils/HttpErrorUtils";
 import SettingsService from "./SettingsService";
 
 type HttpResult = {
   status: number;
   body: string;
 };
+
+const backendError = (res: HttpResult) =>
+  new BusinessError(
+    ResponseCode.BACKEND_ERROR,
+    HttpErrorUtils.describe(res.status, res.body)
+  );
 
 class SkyLabService {
   private readonly _settingsService: SettingsService;
@@ -51,12 +58,17 @@ class SkyLabService {
             });
             response.on("error", (err: Error) => {
               clearRequestTimeout();
-              reject(err);
+              reject(
+                new BusinessError(ResponseCode.BACKEND_UNREACHABLE, err.message)
+              );
             });
           });
+          // 連不上（離線、DNS、憑證、逾時）跟伺服器回錯誤分開，畫面才能給對的建議
           req.on("error", (err: Error) => {
             clearRequestTimeout();
-            reject(new BusinessError(ResponseCode.BACKEND_ERROR, err.message));
+            reject(
+              new BusinessError(ResponseCode.BACKEND_UNREACHABLE, err.message)
+            );
           });
           if (options.body !== undefined) {
             req.write(JSON.stringify(options.body));
@@ -64,7 +76,7 @@ class SkyLabService {
           timeout = setTimeout(() => {
             reject(
               new BusinessError(
-                ResponseCode.BACKEND_ERROR,
+                ResponseCode.BACKEND_UNREACHABLE,
                 "Request timed out."
               )
             );
@@ -90,7 +102,7 @@ class SkyLabService {
         return false;
       }
       if (res.status !== 200) {
-        throw new BusinessError(ResponseCode.BACKEND_ERROR, res.body);
+        throw backendError(res);
       }
       const data = JSON.parse(res.body) as {
         access_token?: string;
@@ -138,7 +150,7 @@ class SkyLabService {
         "SkyLabService.requestDeviceCode",
         `status=${res.status} body=${res.body}`
       );
-      throw new BusinessError(ResponseCode.BACKEND_ERROR, res.body);
+      throw backendError(res);
     }
     return JSON.parse(res.body) as DeviceCodeResponse;
   }
@@ -156,7 +168,7 @@ class SkyLabService {
       );
     }
     if (res.status !== 200) {
-      throw new BusinessError(ResponseCode.BACKEND_ERROR, res.body);
+      throw backendError(res);
     }
     const data = JSON.parse(res.body);
     return {
@@ -178,7 +190,7 @@ class SkyLabService {
       body: refreshToken ? { refresh_token: refreshToken } : {}
     });
     if (res.status !== 200 && res.status !== 401) {
-      throw new BusinessError(ResponseCode.BACKEND_ERROR, res.body);
+      throw backendError(res);
     }
   }
 
@@ -190,7 +202,7 @@ class SkyLabService {
       throw new BusinessError(ResponseCode.NOT_LOGGED_IN);
     }
     if (res.status !== 200) {
-      throw new BusinessError(ResponseCode.BACKEND_ERROR, res.body);
+      throw backendError(res);
     }
     return JSON.parse(res.body) as SkyLabResource[];
   }
@@ -207,7 +219,7 @@ class SkyLabService {
       throw new BusinessError(ResponseCode.NOT_LOGGED_IN);
     }
     if (res.status !== 200) {
-      throw new BusinessError(ResponseCode.BACKEND_ERROR, res.body);
+      throw backendError(res);
     }
     return JSON.parse(res.body) as SkyLabQuickPracticeSession[];
   }
@@ -222,7 +234,7 @@ class SkyLabService {
       throw new BusinessError(ResponseCode.NOT_LOGGED_IN);
     }
     if (res.status !== 200) {
-      throw new BusinessError(ResponseCode.BACKEND_ERROR, res.body);
+      throw backendError(res);
     }
     return JSON.parse(res.body) as SkyLabSessionStatus;
   }
@@ -234,7 +246,7 @@ class SkyLabService {
       { auth: true }
     );
     if (res.status !== 200) {
-      throw new BusinessError(ResponseCode.BACKEND_ERROR, res.body);
+      throw backendError(res);
     }
     return JSON.parse(res.body) as SkyLabSessionStatus[];
   }
@@ -249,7 +261,7 @@ class SkyLabService {
       throw new BusinessError(ResponseCode.NOT_LOGGED_IN);
     }
     if (res.status !== 200) {
-      throw new BusinessError(ResponseCode.BACKEND_ERROR, res.body);
+      throw backendError(res);
     }
     return JSON.parse(res.body) as SkyLabExtendResult;
   }
@@ -270,7 +282,7 @@ class SkyLabService {
       throw new BusinessError(ResponseCode.NOT_LOGGED_IN);
     }
     if (res.status !== 200) {
-      throw new BusinessError(ResponseCode.BACKEND_ERROR, res.body);
+      throw backendError(res);
     }
     return JSON.parse(res.body) as SkyLabWireGuardConfig;
   }
@@ -285,7 +297,7 @@ class SkyLabService {
       throw new BusinessError(ResponseCode.NOT_LOGGED_IN);
     }
     if (res.status !== 200) {
-      throw new BusinessError(ResponseCode.BACKEND_ERROR, res.body);
+      throw backendError(res);
     }
     return JSON.parse(res.body) as SkyLabWireGuardConfig;
   }
@@ -300,7 +312,7 @@ class SkyLabService {
       throw new BusinessError(ResponseCode.NOT_LOGGED_IN);
     }
     if (res.status !== 200) {
-      throw new BusinessError(ResponseCode.BACKEND_ERROR, res.body);
+      throw backendError(res);
     }
   }
 }

@@ -1,207 +1,257 @@
 <script lang="ts" setup>
-import Breadcrumb from "@/layout/compoenets/Breadcrumb.vue";
 import { send } from "@/utils/ipcUtils";
-import { defineComponent } from "vue";
 import { useI18n } from "vue-i18n";
 import { ipcRouters } from "../../../electron/core/IpcRouter";
 import pkg from "../../../package.json";
+import MIcon from "@/components/MIcon.vue";
+import PageHeader from "@/components/PageHeader.vue";
 import PixelOcto from "@/components/PixelOcto.vue";
 
-defineComponent({ name: "About" });
+defineOptions({ name: "About" });
 
 const { t } = useI18n();
 
 /* 建置時由 vite.config.mts 注入：授權、原始碼網址、直接依賴的授權清單 */
 const about = __SKYLAB_ABOUT__;
 const repositoryHost = about.repository.replace(/^https?:\/\//, "");
+const features = [
+  { key: "about.features.oneClick", icon: "bolt" },
+  { key: "about.features.bundled", icon: "vpn_lock" },
+  { key: "about.features.secure", icon: "verified_user" }
+];
 
+const openUrl = (url: string) => send(ipcRouters.SYSTEM.openUrl, { url });
 const openAppData = () => send(ipcRouters.SYSTEM.openAppData);
-const openRepository = () =>
-  send(ipcRouters.SYSTEM.openUrl, { url: about.repository });
 const openLicense = () =>
-  send(ipcRouters.SYSTEM.openUrl, {
-    url: `${about.repository.replace(/\/$/, "")}/blob/main/LICENSE`
-  });
+  openUrl(`${about.repository.replace(/\/$/, "")}/blob/main/LICENSE`);
 const openThirdPartyNotices = () =>
   send(ipcRouters.SYSTEM.openThirdPartyNotices);
 </script>
 
 <template>
-  <div class="main">
-    <breadcrumb />
-    <div class="app-container-breadcrumb">
-      <div class="page-surface about-surface">
-        <PixelOcto :scale="5" class="about-logo" />
-        <div class="about-name">{{ t("about.name") }}</div>
-        <div class="about-description">
-          {{ t("about.description") }}
-        </div>
-        <div class="about-tags">
-          <el-tag size="small" type="success">{{
-            t("about.features.oneClick")
-          }}</el-tag>
-          <el-tag size="small" type="primary">{{
-            t("about.features.bundled")
-          }}</el-tag>
-          <el-tag size="small" type="danger">{{
-            t("about.features.secure")
-          }}</el-tag>
-        </div>
-        <div class="about-version">
-          {{ t("about.version") }} v{{ pkg.version }}
-        </div>
+  <main class="workspace-page">
+    <PageHeader :title="t('router.about.title')" />
 
-        <dl class="about-meta">
-          <dt>{{ t("about.license") }}</dt>
-          <dd>
-            <el-link type="primary" :underline="false" @click="openLicense">
-              {{ t("about.licenseName") }}
-            </el-link>
-            <div class="about-hint">{{ t("about.licenseHint") }}</div>
-          </dd>
-          <dt>{{ t("about.repository") }}</dt>
-          <dd>
-            <el-link type="primary" :underline="false" @click="openRepository">
-              {{ repositoryHost }}
-            </el-link>
-          </dd>
-        </dl>
+    <!-- 寬視窗兩欄：左邊是 App 名片，右邊是授權與開源元件；窄視窗疊成一欄 -->
+    <div class="about-grid">
+      <section class="sl-card about-hero">
+        <PixelOcto :scale="5" />
+        <h2 class="about-name">{{ t("about.name") }}</h2>
+        <span class="sl-badge sl-badge--muted">v{{ pkg.version }}</span>
+        <p class="about-description">{{ t("about.description") }}</p>
+        <ul class="about-features">
+          <li v-for="feature in features" :key="feature.key">
+            <MIcon :name="feature.icon" :size="18" />{{ t(feature.key) }}
+          </li>
+        </ul>
+        <button
+          type="button"
+          class="sl-btn-secondary about-data"
+          @click="openAppData"
+        >
+          <MIcon name="folder_open" :size="16" />{{ t("about.openDataDir") }}
+        </button>
+      </section>
 
-        <div class="about-actions">
-          <el-button size="small" @click="openThirdPartyNotices">
-            {{ t("about.thirdPartyNotices") }}
-          </el-button>
-          <el-button size="small" @click="openAppData">
-            {{ t("about.openDataDir") }}
-          </el-button>
-        </div>
-
-        <div class="about-components">
-          <div class="about-components-title">
-            {{ t("about.components.title") }}
-          </div>
-          <div class="about-hint">
-            {{
-              t("about.components.hint", { count: about.dependencies.length })
-            }}
-          </div>
-          <el-table :data="about.dependencies" size="small" max-height="260">
-            <el-table-column
-              prop="name"
-              :label="t('about.components.package')"
-              min-width="160"
+      <div class="about-side">
+        <section class="sl-card">
+          <div class="sl-card__header license-header">
+            <h2 class="sl-card__title">{{ t("about.licenseTitle") }}</h2>
+            <button
+              type="button"
+              class="sl-btn-secondary"
+              @click="openThirdPartyNotices"
             >
-              <template #default="{ row }">
-                <el-link
-                  v-if="row.repository"
-                  type="primary"
-                  :underline="false"
-                  @click="
-                    send(ipcRouters.SYSTEM.openUrl, { url: row.repository })
-                  "
+              <MIcon name="description" :size="16" />{{
+                t("about.thirdPartyNotices")
+              }}
+            </button>
+          </div>
+          <dl class="about-meta">
+            <div>
+              <dt>{{ t("about.license") }}</dt>
+              <dd>
+                <button type="button" class="sl-link" @click="openLicense">
+                  {{ t("about.licenseName") }}
+                </button>
+              </dd>
+            </div>
+            <div>
+              <dt>{{ t("about.repository") }}</dt>
+              <dd>
+                <button
+                  type="button"
+                  class="sl-link"
+                  @click="openUrl(about.repository)"
                 >
-                  {{ row.name }}
-                </el-link>
-                <span v-else>{{ row.name }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column
-              prop="version"
-              :label="t('about.components.version')"
-              width="110"
-            />
-            <el-table-column
-              prop="license"
-              :label="t('about.components.license')"
-              width="110"
-            />
-          </el-table>
-        </div>
+                  {{ repositoryHost }}
+                </button>
+              </dd>
+            </div>
+          </dl>
+          <p class="about-hint">{{ t("about.licenseHint") }}</p>
+        </section>
+
+        <section class="sl-card">
+          <div>
+            <h2 class="sl-card__title">{{ t("about.components.title") }}</h2>
+            <p class="sl-card__hint">
+              {{
+                t("about.components.hint", { count: about.dependencies.length })
+              }}
+            </p>
+          </div>
+          <div class="components-table">
+            <table class="sl-table">
+              <thead>
+                <tr>
+                  <th>{{ t("about.components.package") }}</th>
+                  <th>{{ t("about.components.version") }}</th>
+                  <th>{{ t("about.components.license") }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="dep in about.dependencies" :key="dep.name">
+                  <td>
+                    <button
+                      v-if="dep.repository"
+                      type="button"
+                      class="sl-link"
+                      @click="openUrl(dep.repository)"
+                    >
+                      {{ dep.name }}
+                    </button>
+                    <span v-else>{{ dep.name }}</span>
+                  </td>
+                  <td class="cell-mono">{{ dep.version }}</td>
+                  <td>
+                    <span class="sl-badge sl-badge--muted">{{
+                      dep.license || "—"
+                    }}</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
       </div>
     </div>
-  </div>
+  </main>
 </template>
 
 <style lang="scss" scoped>
-.about-surface {
+/* 標題只有一行：跟右邊的按鈕垂直置中（軟體更新卡片有副標，才用靠上對齊） */
+.license-header {
   align-items: center;
-  justify-content: center;
+}
+
+.about-grid,
+.about-side {
+  @include flex-column;
+  gap: $spacing-24;
+}
+
+/* 內容區夠寬才分兩欄（.desktop-main 是 container）；名片固定寬、右欄吃剩下的 */
+@container (min-width: 880px) {
+  .about-grid {
+    display: grid;
+    grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+.about-hero {
+  align-items: center;
+  gap: 12px;
+  padding-block: 32px;
   text-align: center;
 }
 
-.about-logo {
-  margin-bottom: 8px;
-}
-
 .about-name {
-  margin-top: 10px;
+  margin-top: $spacing-8;
   color: var(--color-text-primary);
-  font-size: 22px;
-  font-weight: 700;
+  font-size: $font-size-18;
+  font-weight: $font-weight-700;
 }
 
 .about-description {
-  max-width: 440px;
+  max-width: 280px;
   color: var(--color-text-secondary);
-  font-size: 14px;
+  font-size: $font-size-14;
 }
 
-.about-tags {
+/* 三個賣點：圖示＋一行字，比三顆徽章好讀 */
+.about-features {
+  @include flex-column;
+  gap: $spacing-8;
+  width: 100%;
+  padding: 12px $spacing-16;
+  border: 1px solid var(--color-border);
+  border-radius: $radius-12;
+  background: var(--color-surface);
+  max-width: 360px;
+  text-align: left;
+
+  li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--color-text-primary);
+    font-size: $font-size-14;
+  }
+
+  .material-icons-outlined {
+    color: var(--color-primary-on-surface);
+  }
+}
+
+.about-data {
+  margin-top: $spacing-4;
+}
+
+/* 授權與原始碼排同一列（標籤＋連結成對），視窗太窄放不下兩組時自然換行；
+   AGPL 說明是兩者共同的補充，獨立放在下一行，不擠在半邊欄位裡 */
+.about-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  justify-content: center;
-}
+  gap: $spacing-8 40px;
 
-.about-version {
-  color: var(--color-text-muted);
-  font-size: 12px;
-}
-
-.about-meta {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 6px 16px;
-  width: 100%;
-  max-width: 520px;
-  margin: 8px 0 0;
-  text-align: left;
-  font-size: 13px;
+  > div {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    min-width: 0;
+  }
 
   dt {
-    color: var(--color-text-secondary);
+    color: var(--color-text-muted);
+    font-size: $font-size-14;
   }
 
   dd {
-    margin: 0;
     color: var(--color-text-primary);
+    font-size: $font-size-14;
   }
 }
 
 .about-hint {
-  margin-top: 2px;
+  margin-top: -$spacing-8;
   color: var(--color-text-muted);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: $font-size-12;
+  line-height: $line-height-base;
 }
 
-.about-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: center;
+/* 內容區塊白底細框（玻璃卡內容區塊規範） */
+.components-table {
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: $radius-8;
+  background: var(--color-surface);
 }
 
-.about-components {
-  width: 100%;
-  max-width: 520px;
-  margin-top: 8px;
-  text-align: left;
-}
-
-.about-components-title {
-  color: var(--color-text-primary);
-  font-size: 14px;
-  font-weight: 600;
+.cell-mono {
+  color: var(--color-text-secondary);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
 }
 </style>

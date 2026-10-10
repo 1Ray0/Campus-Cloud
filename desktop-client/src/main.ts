@@ -1,18 +1,18 @@
-import "animate.css";
 import ElementPlus from "element-plus";
 import { createPinia } from "pinia";
 import { createApp, watch } from "vue";
 import App from "./App.vue";
-import {
-  IconifyIconOffline,
-  IconifyIconOnline
-} from "./components/IconifyIcon";
 import i18n from "./lang";
 import router from "./router";
 import { useAppStore } from "./store/app";
 import { ipcRouters } from "../electron/core/IpcRouter";
-import "./styles/index.scss";
+/* 圖示字型與全站樣式（色票、reset、背景）直接用 web 端的同一份；
+   EP 的深色變數檔要排在自家樣式前面，index.scss 才蓋得過它 */
+import "@material-design-icons/font/outlined.css";
+import "@material-design-icons/font/filled.css";
+import "@web/assets/styles/global.scss";
 import "element-plus/theme-chalk/dark/css-vars.css";
+import "./styles/index.scss";
 import "./styles/workspace.scss";
 
 function waitForInitialReply(path: string): Promise<void> {
@@ -32,9 +32,6 @@ function waitForInitialReply(path: string): Promise<void> {
 const pinia = createPinia();
 
 const app = createApp(App);
-app.component("IconifyIconOffline", IconifyIconOffline);
-app.component("IconifyIconOnline", IconifyIconOnline);
-
 app.use(i18n).use(router).use(ElementPlus).use(pinia);
 
 const appStore = useAppStore(pinia);

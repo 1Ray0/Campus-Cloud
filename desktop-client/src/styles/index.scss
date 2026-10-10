@@ -1,252 +1,60 @@
-@use "reset";
-@use "layout";
 @use "element";
-@use "tailwind";
 @use "scrollbar";
 
-:root {
-  --pure-transition-duration: 0.016s;
-  --color-bg-base: #e8f0fd;
-  --color-bg-gradient-blue: #c1daff;
-  --color-bg-gradient-yellow: #feffed;
-  --color-bg-gradient-green: #edfff6;
-  --color-surface: #ffffff;
-  --color-surface-glass: rgba(255, 255, 255, 0.68);
-  --color-surface-glass-border: rgba(255, 255, 255, 0.52);
-  --color-sidebar-glass: rgba(255, 255, 255, 0.58);
-  --color-sidebar-glass-border: rgba(255, 255, 255, 0.42);
-  --color-primary: #5471bf;
-  --color-primary-dark: #2b4d98;
-  --color-primary-light: #6a7fb3;
-  --color-text: #5471bf;
-  --color-text-primary: #3a549d;
-  --color-text-secondary: #617dc8;
-  --color-text-muted: #8291aa;
-  --color-text-on-primary: #ffffff;
-  --color-border: #e5eaf3;
-  --color-divider: #eef2f9;
-  --color-hover: #e8efff;
-  --color-success: #28a745;
-  --color-danger: #dc3545;
-  --color-info: #5471bf;
-  --color-status-neutral: #6b7280;
-  --shadow-sm: 0 1px 3px rgba(67, 90, 149, 0.08);
-  --shadow-md: 0 4px 12px rgba(67, 90, 149, 0.08);
-  --shadow-lg: 0 8px 24px rgba(67, 90, 149, 0.12);
-  --shadow-glass:
-    0 4px 16px rgba(67, 90, 149, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+/* 色票、reset、背景暈染、MIcon 旋轉都直接用 web 的 global.scss（main.ts 先 import 它），
+   這裡只放桌面端自己的：Element Plus 變數對應、整個視窗當 App 用的設定 */
+
+/* ── Element Plus 跟著同一組色票走 ──
+   設在 body（不是 :root）：web 的深色色票掛在 body.dark，
+   EP 變數要在同一層代入才會吃到深色值；EP 自己的深色檔掛在 html.dark，這裡較近、蓋得過它 */
+body {
+  --el-color-primary: var(--color-primary);
+  --el-color-success: var(--color-success);
+  --el-color-danger: var(--color-danger);
+  --el-color-error: var(--color-danger);
+  --el-color-warning: var(--color-pending);
+  --el-color-info: var(--color-status-neutral);
+  --el-bg-color: var(--color-surface);
+  --el-bg-color-overlay: var(--color-surface);
+  --el-fill-color-blank: var(--color-surface);
+  --el-fill-color-light: var(--color-hover);
+  --el-text-color-primary: var(--color-text-primary);
+  --el-text-color-regular: var(--color-text);
+  --el-text-color-secondary: var(--color-text-secondary);
+  --el-text-color-placeholder: var(--color-text-muted);
+  --el-border-color: var(--color-border);
+  --el-border-color-light: var(--color-border);
+  --el-border-color-lighter: var(--color-divider);
+  --el-overlay-color-lighter: var(--color-overlay);
 }
 
-.html-grey {
-  filter: grayscale(100%);
+/* 深色：EP 主色改用深底上看得清的 on-surface 藍，淡色階以表面色混出
+   （EP 的深色檔是拿它預設的 #409eff 算的，不蓋掉會冒出另一種藍） */
+body.dark {
+  --el-color-primary: var(--color-primary-on-surface);
+  --el-color-primary-light-3: color-mix(in srgb, var(--color-primary-on-surface) 70%, var(--color-surface));
+  --el-color-primary-light-5: color-mix(in srgb, var(--color-primary-on-surface) 50%, var(--color-surface));
+  --el-color-primary-light-7: color-mix(in srgb, var(--color-primary-on-surface) 30%, var(--color-surface));
+  --el-color-primary-light-8: color-mix(in srgb, var(--color-primary-on-surface) 20%, var(--color-surface));
+  --el-color-primary-light-9: color-mix(in srgb, var(--color-primary-on-surface) 10%, var(--color-surface));
+  --el-color-primary-dark-2: var(--color-primary-light);
 }
 
-.html-weakness {
-  filter: invert(80%);
-}
-
-html {
-  background: var(--color-bg-base);
+/* ── 整個視窗是一個 App：撐滿、不讓文字被當網頁選取（輸入框與可複製的值例外） ── */
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
 }
 
 body {
-  position: relative;
-  color: var(--color-text);
-  background: var(--color-bg-base);
+  overflow: hidden;
+  user-select: none;
 }
 
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(
-      ellipse 100% 60% at 100% 0%,
-      var(--color-bg-gradient-blue) 0%,
-      transparent 100%
-    ),
-    radial-gradient(
-      ellipse 100% 80% at 0% 90%,
-      var(--color-bg-gradient-yellow) 0%,
-      transparent 100%
-    ),
-    radial-gradient(
-      ellipse 150% 70% at 100% 100%,
-      var(--color-bg-gradient-green) 0%,
-      transparent 100%
-    );
-}
-
-.h2 {
-  padding: 6px 10px 6px 15px;
-  margin-bottom: 18px;
-  color: var(--color-text-primary);
-  font-family:
-    "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB",
-    "Microsoft YaHei", Arial, sans-serif;
-  font-size: 16px;
-  font-weight: 700;
-  background-color: var(--color-hover);
-  border-left: 5px solid var(--color-primary);
-  border-radius: 8px;
-}
-
-.h3 {
-  padding: 6px 10px;
-  margin-bottom: 14px;
-  color: var(--color-text-primary);
-  font-family:
-    "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB",
-    "Microsoft YaHei", Arial, sans-serif;
-  font-size: 14px;
-  font-weight: 600;
-  background-color: var(--color-hover);
-  border-left: 4px solid var(--color-primary);
-  border-radius: 8px;
-}
-
-.left-border {
-  border-left: 5px solid var(--color-primary);
-}
-
-.page-surface {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  width: 100%;
-  min-height: 100%;
-  padding: 20px;
-  overflow: auto;
-  background: var(--color-surface-glass);
-  border: 1px solid var(--color-surface-glass-border);
-  border-radius: 8px;
-  box-shadow: var(--shadow-glass);
-  backdrop-filter: blur(16px) saturate(1.25);
-}
-
-.page-header {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  align-items: flex-start;
-  justify-content: space-between;
-}
-
-.page-title {
-  color: var(--color-text-primary);
-  font-size: 22px;
-  font-weight: 700;
-}
-
-.page-subtitle {
-  margin-top: 4px;
-  color: var(--color-text-secondary);
-  font-size: 13px;
-}
-
-.section-panel {
-  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  box-shadow: var(--shadow-sm);
-}
-
-.section-header {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--color-divider);
-}
-
-.section-title {
-  color: var(--color-text-primary);
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.status-pill {
-  display: inline-flex;
-  gap: 7px;
-  align-items: center;
-  min-height: 30px;
-  padding: 5px 10px;
-  color: var(--color-primary-dark);
-  font-size: 12px;
-  font-weight: 700;
-  background: var(--color-hover);
-  border-radius: 999px;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  background: var(--color-status-neutral);
-  border-radius: 999px;
-}
-
-.status-dot--success {
-  background: var(--color-success);
-}
-
-.status-dot--danger {
-  background: var(--color-danger);
-}
-
-.status-dot--muted {
-  background: var(--color-status-neutral);
-}
-
-.metric-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
-}
-
-.metric-item {
-  min-height: 74px;
-  padding: 14px;
-  background: color-mix(in srgb, var(--color-surface) 64%, transparent);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-}
-
-.metric-label {
-  color: var(--color-text-muted);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.metric-value {
-  margin-top: 6px;
-  color: var(--color-text-primary);
-  font-size: 20px;
-  font-weight: 700;
-}
-
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  align-items: center;
-  justify-content: center;
-  min-height: 180px;
-  color: var(--color-text-muted);
-  font-size: 13px;
-  text-align: center;
-}
-
-.empty-icon {
-  display: flex;
-  width: 44px;
-  height: 44px;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-primary);
-  font-size: 24px;
-  background: var(--color-hover);
-  border-radius: 8px;
+input,
+textarea,
+[data-selectable] {
+  user-select: text;
 }

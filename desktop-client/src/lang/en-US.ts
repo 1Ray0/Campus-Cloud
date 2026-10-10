@@ -3,17 +3,17 @@
     navigation: "Main navigation",
     connectionInfo: "Connection details",
     openWeb: "Open web platform",
-    waitingGateway: "Waiting for gateway",
+    waitingGateway: "Waiting for server",
     waitingGatewayHint:
-      "The tunnel has started, but no WireGuard handshake has been received. Check your network or contact an administrator if this continues.",
+      "The tunnel has started, but the server hasn't responded yet. If it still doesn't respond, check your network or contact an administrator.",
     tunnelActive: "Tunnel active",
     tunnelActiveHint:
-      "WireGuard handshake details are unavailable. Checking machine reachability.",
+      "The server's last response time isn't available. Checking that your machines are reachable instead.",
     protocol: "Protocol",
     interface: "Interface",
-    handshake: "Last handshake",
-    noHandshake: "Not received yet",
-    handshakeUnavailable: "Permission required",
+    handshake: "Last server response",
+    noHandshake: "No response yet",
+    handshakeUnavailable: "Unavailable",
     close: "Close",
     details: "Machine details",
     detailsFor: "Details for {name}",
@@ -36,11 +36,15 @@
     list: "List view",
     toggleTheme: "Toggle color theme",
     machineCount: "{count} machines",
-    noMatches: "No machines match your search",
-    resourceError: "Could not update resources. Please refresh.",
+    noMatches: "No machines match",
+    view: "View",
+    clearFilters: "Clear filters",
+    resourceError: "Couldn't update resources",
     appearance: "Appearance",
     dark: "Dark",
-    light: "Light"
+    light: "Light",
+    system: "System",
+    unnamedCourse: "Untitled course"
   },
   update: {
     settingsTitle: "Software update",
@@ -56,35 +60,29 @@
     downloading: "Downloading update",
     verifying: "Verifying installer",
     launching: "Opening installer",
-    installError: "Update failed",
     title: "Update available",
-    message:
-      "SkyLab Connect {version} is available. Download the latest installer now.",
-    download: "Download update",
     later: "Remind me later"
   },
-  app: {
-    title: "SkyLab Connect",
-    description: "Connect to your SkyLab virtual machines"
-  },
   router: {
-    home: { title: "Home" },
-    resources: { title: "Resources" },
-    logger: { title: "Logs" },
-    config: { title: "Settings" },
-    about: { title: "About" },
-    login: { title: "Login" }
+    config: {
+      title: "Settings"
+    },
+    about: {
+      title: "About"
+    }
   },
   common: {
-    save: "Save",
     cancel: "Cancel",
-    confirm: "Confirm",
+    save: "Save",
     refresh: "Refresh",
-    copy: "Copy",
-    copied: "Copied",
-    loading: "Loading...",
-    yes: "Yes",
-    no: "No"
+    loading: "Loading…",
+    on: "On",
+    off: "Off"
+  },
+  unsavedGuard: {
+    title: "Unsaved changes",
+    message: "This page has unsaved changes. They will be lost if you leave.",
+    leave: "Discard and leave"
   },
   sessionWarning: {
     autoStopTitle: "VM will auto-stop soon",
@@ -99,23 +97,8 @@
     doNotShow: "Don't show this again"
   },
   login: {
-    title: "Sign in to SkyLab",
-    connectTitle: "Connect to your machines",
-    connectDescription:
-      "Press connect. On first use, sign in in your browser and the secure connection will start automatically.",
-    connect: "Connect",
-    waitingShort: "Verifying",
-    firstUseHint:
-      "First use requires browser sign-in. You will return here automatically when it is complete.",
-    description:
-      "Click the button below; your browser will open to complete sign-in.",
-    startButton: "Open browser to sign in",
-    cancelButton: "Cancel",
-    logoutButton: "Sign out",
-    waiting: "Waiting for browser verification...",
     success: "Signed in",
-    failure: "Sign-in failed: {error}",
-    alreadyLoggedIn: "Signed in"
+    failure: "Sign-in failed: {error}"
   },
   home: {
     status: {
@@ -123,13 +106,10 @@
         "Session renewal failed and will retry automatically. Reconnect if the session expires.",
       running: "Connected",
       stopped: "Disconnected",
-      error: "Connection error",
-      uptime: "Connected {time}"
+      error: "Connection error"
     },
     button: {
-      start: "Connect",
-      stop: "Disconnect",
-      refresh: "Refresh"
+      stop: "Disconnect"
     },
     connect: {
       title: "Connect to SkyLab",
@@ -138,71 +118,28 @@
       button: "Connect",
       connecting: "Creating secure connection",
       authenticating: "Waiting for sign-in",
-      secureHint: "WireGuard encrypted · One click",
       authHint: "Complete sign-in in your browser · Connects automatically"
     },
     machines: {
-      summary:
-        "Connected · {machines} machines · {courses} course environments",
       unavailable: "No connection",
       noTargets:
         "The secure connection is active, but no SSH or RDP targets are available. Check that a machine is running and has a reachable IP. If the problem persists, ask an administrator to check the VPN subnet."
     },
     empty: {
-      notLoggedIn: "Not signed in. Please sign in to SkyLab first.",
-      goLogin: "Go to sign-in",
-      goResources: "View my resources"
+      notLoggedIn: "Not signed in. Please sign in to SkyLab first."
     },
     tunnels: {
-      title: "Available VM connections",
-      empty: "Tunnel details will appear once connected",
-      action: "Action",
-      service: "Service",
-      endpoint: "Local endpoint",
-      machines: "Reachable machines",
-      ready: "Ready",
-      groupSummary: "{machines} machines · {connections} connections",
       connectSsh: "SSH Connect",
-      connectRdp: "RDP Connect",
-      machineStopped: "The machine is not running",
-      invalidPort: "This connection has an invalid local port"
+      connectRdp: "RDP Connect"
     }
   },
   resources: {
-    title: "My Virtual Machines",
     webTitle: "My Resources",
-    webSubtitle:
-      "View and connect to your assigned virtual machines and containers",
-    refresh: "Refresh",
-    summary: "{total} machines across {courses} course environments",
-    connect: "Connect",
-    customEnvironment: "Custom environment",
-    owner: "Owner: {owner}",
-    kind: {
-      personal: "Personal request",
-      shared: "Shared with me",
-      teaching_class: "Class machine",
-      quick_practice: "Quick practice",
-      course: "Course lab"
-    },
-    window: {
-      notStarted: "Usage window starts at {time}",
-      ended: "Usage window ended at {time}"
-    },
-    metrics: {
-      total: "Machines",
-      courseGroups: "Course environments"
-    },
     course: {
-      kind: "Course",
-      title: "Course machines",
-      description: "Review machines by course and expand a group for details",
-      machineCount: "{count} machines · grouped management",
       runningCount: "{running}/{total} running"
     },
     personal: {
-      title: "Personal resources",
-      description: "Individually requested or assigned machines"
+      title: "Personal resources"
     },
     status: {
       running: "Running",
@@ -219,7 +156,6 @@
     table: {
       name: "Name",
       vmid: "VMID",
-      type: "Type",
       status: "Status",
       node: "Node",
       ip: "Private IP",
@@ -229,8 +165,11 @@
     empty: "No virtual machines assigned. Please request one on SkyLab web."
   },
   config: {
+    general: "General",
+    server: "Server",
+    discard: "Restore",
+    saveFailed: "Could not save: {error}",
     title: "Settings",
-    back: "Back to connection",
     language: {
       label: "Language",
       zhTW: "Traditional Chinese",
@@ -243,17 +182,33 @@
     },
     backend: {
       label: "Backend URL",
-      tips: "SkyLab server root URL, without /login."
+      tips: "SkyLab server root URL, without /login.",
+      logoutNotice:
+        "Saving signs you out and disconnects first, then you sign in to the new server.",
+      confirmTitle: "Change the backend URL?",
+      confirmMessage:
+        "SkyLab Connect will sign out and close the current secure connection before switching servers. You will need to sign in again.",
+      confirmButton: "Sign out and change",
+      error: {
+        required: "Enter the backend URL.",
+        invalid: "This URL is not valid, e.g. https://skylab-tw.com.",
+        insecure:
+          "Use https:// (http://localhost is allowed for local testing).",
+        extra: "The URL must not include credentials, a query (?) or #."
+      }
     },
     account: {
       label: "Account",
       loggedIn: "Signed in",
       notLoggedIn: "Not signed in",
-      logout: "Sign out"
+      logout: "Sign out",
+      loginHint:
+        "Click Connect on My Resources to sign in to SkyLab in your browser."
     },
     saveSuccess: "Saved"
   },
   about: {
+    licenseTitle: "License & source code",
     name: "SkyLab Connect",
     description: "Securely reach your SkyLab virtual machines over WireGuard.",
     features: {
@@ -277,16 +232,39 @@
       license: "License"
     }
   },
-  logger: {
-    tab: { appLog: "App log" },
-    message: {
-      openSuccess: "Log opened",
-      refreshSuccess: "Refreshed"
-    },
-    autoRefresh: "Auto refresh",
-    autoRefreshTime: "Refreshing in {time}s",
-    search: { placeholder: "Search logs..." },
-    loading: { text: "Loading..." },
-    content: { empty: "No logs" }
+  errors: {
+    /* 主程序錯誤碼的說明（electron/core/BusinessError.ts）；support 是共用的回報方式 */
+    support:
+      "If this keeps happening, go to About, select “Open data directory”, and send the files in the logs folder to your administrator.",
+    B1000: "Something went wrong. @:errors.support",
+    B1001: "Your sign-in has expired. Please sign in again.",
+    B1002: "Sign-in wasn't completed in time. Select “Connect” to try again.",
+    B1005:
+      "The server couldn't handle the request right now. Try again later, and contact your administrator if it keeps happening.",
+    B1006:
+      "The WireGuard component needed to connect wasn't found. Reinstall SkyLab Connect.",
+    B1007:
+      "The connection key on this computer couldn't be read. @:errors.support",
+    B1008:
+      "The secure connection couldn't be created. Try again. @:errors.support",
+    B1009:
+      "The WireGuard component needed to connect couldn't be installed. Try again. @:errors.support",
+    B1010:
+      "The update couldn't be downloaded or installed. Try again later, or download the latest installer from the SkyLab website.",
+    B1011:
+      "Administrator permission is needed to change the secure connection. Try again and choose “Yes” when Windows asks for permission.",
+    B1012:
+      "Windows didn't finish setting up the secure connection. Try again. @:errors.support",
+    B1013:
+      "The secure connection's authorization has expired. Select “Connect” to reconnect.",
+    B1014:
+      "A secure connection from an earlier session is still active. Select “Connect” to set it up again.",
+    B1015:
+      "The server's network settings changed. Select “Connect” to apply them.",
+    B1016:
+      "The secure connection couldn't be disconnected. Try again. @:errors.support",
+    B1017:
+      "Can't reach the SkyLab server. Check your network connection, or check the Backend URL in Settings.",
+    B1018: "Couldn't open it. Try again. @:errors.support"
   }
 };
