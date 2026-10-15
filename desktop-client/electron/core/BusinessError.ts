@@ -5,6 +5,7 @@ enum ResponseCode {
   INTERNAL_ERROR = "B1000;internal error.",
   NOT_LOGGED_IN = "B1001;Not logged in.",
   LOGIN_TIMEOUT = "B1002;Login timed out.",
+  LOGIN_CANCELLED = "B1003;Login cancelled.",
   BACKEND_ERROR = "B1005;Backend request failed.",
   WIREGUARD_NOT_INSTALLED = "B1006;WireGuard is not installed.",
   WIREGUARD_KEY_STORAGE = "B1007;Secure key storage is unavailable.",

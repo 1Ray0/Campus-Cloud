@@ -137,6 +137,8 @@ class WireGuardTunnelService {
   private _operationRevision = 0;
   private _leaseRefreshError: string | null = null;
   private _activeConfigFingerprint: string | null = null;
+  private _activeIdentity: DecryptedIdentity | null = null;
+  private _activeIdentityScope: string | null = null;
 
   constructor() {
     this._SkyLabService = BeanFactory.getBean("SkyLabService");
@@ -268,11 +270,11 @@ class WireGuardTunnelService {
     return { deviceId: randomUUID(), privateKey, publicKey };
   }
 
-  private _loadIdentity(): DecryptedIdentity {
+  private _loadIdentity(scope?: string): DecryptedIdentity {
     if (!safeStorage.isEncryptionAvailable()) {
       throw new BusinessError(ResponseCode.WIREGUARD_KEY_STORAGE);
     }
-    const identityPath = PathUtils.getWireGuardIdentityFilePath();
+    const identityPath = PathUtils.getWireGuardIdentityFilePath(scope);
     if (!fs.existsSync(identityPath)) {
       const identity = this._createIdentity();
       const stored: WireGuardIdentity = {
@@ -638,13 +640,27 @@ class WireGuardTunnelService {
     this._startPromise = operation;
     try {
       await operation;
+    } catch (error) {
+      this._connectionError = problemOf(
+        error,
+        ResponseCode.WIREGUARD_START_FAILED
+      );
+      throw error;
     } finally {
       if (this._startPromise === operation) this._startPromise = null;
     }
   }
 
   private async _startTunnel(): Promise<void> {
+    const scope = await this._SkyLabService.getConnectionScope();
     if (
+      this._activeIdentityScope !== null &&
+      this._activeIdentityScope !== scope
+    ) {
+      await this._stopTunnel();
+    }
+    if (
+      this._activeIdentityScope === scope &&
       this._lastStartTime !== -1 &&
       this._expiresAt !== null &&
       Date.now() < this._expiresAt &&
@@ -654,7 +670,9 @@ class WireGuardTunnelService {
       return;
     this._connectionError = null;
     await this._ensureWireGuardInstalled();
-    const identity = this._loadIdentity();
+    // Never reuse the legacy shared key: it may already belong to another
+    // account. Each backend/account pair keeps its own stable device and key.
+    const identity = this._loadIdentity(scope);
     const config = await this._SkyLabService.connectWireGuard(
       identity.deviceId,
       identity.publicKey
@@ -673,6 +691,8 @@ class WireGuardTunnelService {
       }
       this._connections = connections;
       this._lastStartTime = Date.now();
+      this._activeIdentity = identity;
+      this._activeIdentityScope = scope;
       this._activeConfigFingerprint = this._configFingerprint(config);
       this._applyLease(config);
       this._notifiedStartTime = -1;
@@ -732,7 +752,15 @@ class WireGuardTunnelService {
         "The WireGuard tunnel is not connected."
       );
     }
-    const identity = this._loadIdentity();
+    const scope = await this._SkyLabService.getConnectionScope();
+    if (scope !== this._activeIdentityScope || !this._activeIdentity) {
+      await this._stopTunnel();
+      throw new BusinessError(
+        ResponseCode.WIREGUARD_START_FAILED,
+        "The signed-in account changed. Disconnect and reconnect."
+      );
+    }
+    const identity = this._activeIdentity;
     const config = await this._SkyLabService.refreshWireGuard(
       identity.deviceId
     );
@@ -788,12 +816,23 @@ class WireGuardTunnelService {
     } catch (error) {
       localError = error as Error;
     }
-    const identityPath = PathUtils.getWireGuardIdentityFilePath();
-    if (fs.existsSync(identityPath)) {
-      try {
-        const identity = this._loadIdentity();
+    try {
+      let identity = this._activeIdentity;
+      if (!identity) {
+        const scope = await this._SkyLabService.getConnectionScope();
+        if (fs.existsSync(PathUtils.getWireGuardIdentityFilePath(scope))) {
+          identity = this._loadIdentity(scope);
+        } else if (fs.existsSync(PathUtils.getWireGuardIdentityFilePath())) {
+          // Allow startup/logout cleanup of a tunnel from the shared-key build.
+          identity = this._loadIdentity();
+        }
+      }
+      if (identity) {
         await this._SkyLabService.disconnectWireGuard(identity.deviceId);
-      } catch (error) {
+      }
+    } catch (error) {
+      // Local cleanup must also work after the login has expired.
+      if (!(error instanceof BusinessError) || error.bizCode !== "B1001") {
         backendError = error as Error;
       }
     }
@@ -809,6 +848,8 @@ class WireGuardTunnelService {
     this._lastLeaseRefreshAt = -1;
     this._lastLeaseRefreshAttemptAt = -1;
     this._activeConfigFingerprint = null;
+    this._activeIdentity = null;
+    this._activeIdentityScope = null;
     this._leaseRefreshError = null;
     const stopError = localError || backendError;
     this._connectionError = stopError

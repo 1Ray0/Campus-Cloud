@@ -1,6 +1,6 @@
 {
   "name": "SkyLab-connect",
-  "version": "0.2.0-beta.13",
+  "version": "0.2.0-beta.14",
   "main": "dist-electron/main/index.js",
   "description": "SkyLab Connect desktop client",
   "private": true,
@@ -19,7 +19,7 @@
     "test:update": "node scripts/test-update.mjs",
     "test:settings": "node scripts/test-settings.mjs",
     "test:backend-url": "node scripts/test-backend-url.mjs",
-    "test:auth": "node scripts/test-auth-login-url.mjs",
+    "test:auth": "node scripts/test-auth-login-url.mjs && node scripts/test-auth.mjs",
     "test:tunnel": "node scripts/test-tunnel.mjs",
     "test:resources": "node scripts/test-resource-access.mjs",
     "test:resource-groups": "node scripts/test-resource-groups.mjs",

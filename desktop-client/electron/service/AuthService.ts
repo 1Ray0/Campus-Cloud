@@ -1,4 +1,4 @@
-﻿import { shell } from "electron";
+import { shell } from "electron";
 import { BusinessError, ResponseCode } from "../core/BusinessError";
 import Logger from "../core/Logger";
 import SkyLabService from "./SkyLabService";
@@ -11,6 +11,7 @@ class AuthService {
   private readonly _tunnelService: WireGuardTunnelService;
   private _pollTimer: NodeJS.Timeout | null = null;
   private _loginInProgress = false;
+  private _loginAttempt = 0;
 
   constructor(
     SkyLabService: SkyLabService,
@@ -67,58 +68,66 @@ class AuthService {
     onResult: (success: boolean, error?: BusinessError) => void
   ): Promise<void> {
     if (this._loginInProgress) {
-      throw new BusinessError(
-        ResponseCode.INTERNAL_ERROR,
-        "Login already in progress"
-      );
+      return;
     }
     this._loginInProgress = true;
+    const attempt = ++this._loginAttempt;
+    const isCurrent = () =>
+      this._loginInProgress && this._loginAttempt === attempt;
+    const finish = (success: boolean, error?: BusinessError) => {
+      if (!isCurrent()) return;
+      this._loginInProgress = false;
+      this._pollTimer = null;
+      onResult(success, error);
+    };
 
     try {
       const dc = await this._SkyLabService.requestDeviceCode();
+      if (!isCurrent()) return;
       if (!dc.device_code) {
         throw new BusinessError(
           ResponseCode.INTERNAL_ERROR,
           "Backend returned an invalid device code"
         );
       }
-      // Use the configured server for the login page. The backend's
-      // FRONTEND_HOST may still point to an earlier deployment domain.
       const loginUrl = new URL(
         "/login",
         await this._settingsService.getBackendUrl()
       );
       loginUrl.searchParams.set("device_code", dc.device_code);
+      if (!isCurrent()) return;
       await shell.openExternal(loginUrl.toString());
+      if (!isCurrent()) return;
       const expiresAt = Date.now() + dc.expires_in * 1000;
 
       const poll = async () => {
+        if (!isCurrent()) return;
         if (Date.now() > expiresAt) {
-          this._loginInProgress = false;
-          this._pollTimer = null;
-          onResult(false, new BusinessError(ResponseCode.LOGIN_TIMEOUT));
+          finish(false, new BusinessError(ResponseCode.LOGIN_TIMEOUT));
           return;
         }
         try {
           const result = await this._SkyLabService.pollDeviceCode(
             dc.device_code
           );
+          if (!isCurrent()) return;
+          if (result.status === "denied") {
+            finish(false, new BusinessError(ResponseCode.LOGIN_CANCELLED));
+            return;
+          }
           if (result.status === "approved" && result.accessToken) {
             await this._settingsService.setTokens(
               result.accessToken,
               result.refreshToken || ""
             );
-            this._loginInProgress = false;
-            this._pollTimer = null;
-            onResult(true);
+            finish(true);
             return;
           }
           this._pollTimer = setTimeout(poll, 2000);
         } catch (err) {
+          if (!isCurrent()) return;
           Logger.warn("AuthService.startLogin.poll", (err as Error).message);
-          this._loginInProgress = false;
-          this._pollTimer = null;
-          onResult(
+          finish(
             false,
             err instanceof BusinessError
               ? err
@@ -132,12 +141,14 @@ class AuthService {
 
       this._pollTimer = setTimeout(poll, 2000);
     } catch (err) {
+      if (!isCurrent()) return;
       this._loginInProgress = false;
       throw err;
     }
   }
 
   cancelLogin() {
+    ++this._loginAttempt;
     if (this._pollTimer) {
       clearTimeout(this._pollTimer);
       this._pollTimer = null;

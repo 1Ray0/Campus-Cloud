@@ -97,6 +97,7 @@
     doNotShow: "不再顯示此提醒"
   },
   login: {
+    cancelButton: "取消登入",
     success: "登入成功",
     failure: "登入失敗：{error}"
   },

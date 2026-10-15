@@ -97,6 +97,7 @@
     doNotShow: "Don't show this again"
   },
   login: {
+    cancelButton: "Cancel sign-in",
     success: "Signed in",
     failure: "Sign-in failed: {error}"
   },

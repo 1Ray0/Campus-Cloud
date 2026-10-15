@@ -1,13 +1,12 @@
 <script lang="ts" setup>
 import router from "@/router";
 import { useAppStore } from "@/store/app";
-import { describeError, NOT_LOGGED_IN, toastError } from "@/utils/errors";
-import { on, removeRouterListeners, send } from "@/utils/ipcUtils";
+import { describeError, NOT_LOGGED_IN } from "@/utils/errors";
+import { on, send } from "@/utils/ipcUtils";
 import {
   findResourceForTunnel,
   groupResourcesByCourse
 } from "@/utils/resourceGroups";
-import { ElMessage } from "element-plus";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { ipcRouters } from "../../../electron/core/IpcRouter";
@@ -23,8 +22,18 @@ defineOptions({ name: "Home" });
 
 const { t } = useI18n();
 const appStore = useAppStore();
-const loading = ref(false);
-const authenticating = ref(false);
+const tunnelLoading = ref(false);
+const authenticating = computed(() => appStore.loginInProgress);
+const loading = computed(
+  () =>
+    tunnelLoading.value || authenticating.value || appStore.connectionStarting
+);
+const disposers: Array<() => void> = [];
+const listen: typeof on = (...args) => {
+  const dispose = on(...args);
+  disposers.push(dispose);
+  return dispose;
+};
 const refreshing = ref(false);
 /** 首頁操作（登入、連線、更新授權）失敗的錯誤碼；login＝登入流程，顯示時加上「登入失敗」 */
 const operationError = ref<{ code: string; login?: boolean } | null>(null);
@@ -149,6 +158,11 @@ const connectionHint = computed(() =>
       : t("home.connect.description")
 );
 const displayedError = computed(() => {
+  if (appStore.loginErrorCode) {
+    return t("login.failure", {
+      error: describeError(appStore.loginErrorCode)
+    });
+  }
   const failure = operationError.value;
   if (failure) {
     const reason = describeError(failure.code);
@@ -160,11 +174,10 @@ const displayedError = computed(() => {
 /** 操作失敗顯示在連線卡下方；登入失效由 store 統一提示一次，這裡不重複 */
 const showOperationError = (
   code: string,
-  options: { login?: boolean; toast?: boolean } = {}
+  options: { login?: boolean } = {}
 ) => {
   if (code === NOT_LOGGED_IN) return;
   operationError.value = { code, login: options.login };
-  if (options.toast) ElMessage.error(displayedError.value);
 };
 const openWeb = () =>
   send(ipcRouters.SYSTEM.openUrl, { url: appStore.backendUrl });
@@ -222,8 +235,7 @@ watch(
   loggedIn => {
     if (loggedIn) appStore.refreshResources();
     else {
-      loading.value = false;
-      authenticating.value = false;
+      tunnelLoading.value = false;
     }
   },
   { immediate: true }
@@ -243,7 +255,7 @@ watch(
   () => appStore.tunnelStatus.running,
   running => {
     if (running) {
-      if (!stopping.value) loading.value = false;
+      if (!stopping.value) tunnelLoading.value = false;
       operationError.value = null;
       appStore.refreshResources();
     }
@@ -252,8 +264,7 @@ watch(
 
 const startTunnel = () => {
   if (stopping.value) return;
-  loading.value = true;
-  authenticating.value = false;
+  tunnelLoading.value = true;
   operationError.value = null;
   send(ipcRouters.TUNNEL.start);
 };
@@ -265,42 +276,14 @@ const handleConnect = () => {
     return;
   }
 
-  loading.value = true;
-  authenticating.value = true;
   operationError.value = null;
-  appStore.loginInProgress = true;
-  send(ipcRouters.AUTH.startLogin);
-};
-
-const authEventHandler = (_event: any, args: ApiResponse<any>) => {
-  if (!args || args.bizCode !== "A1000") return;
-  const payload = args.data;
-  if (!payload) return;
-
-  appStore.loginInProgress = false;
-  if (payload.type === "login-success") {
-    appStore.loggedIn = true;
-    appStore.refreshAuth();
-    appStore.refreshResources();
-    ElMessage.success(t("login.success"));
-    startTunnel();
-    return;
-  }
-
-  if (payload.type === "login-failure") {
-    loading.value = false;
-    authenticating.value = false;
-    showOperationError(payload.errorCode || "B1000", {
-      login: true,
-      toast: true
-    });
-  }
+  appStore.startLogin();
 };
 
 const handleDisconnect = () => {
   if (loading.value) return;
   stopping.value = true;
-  loading.value = true;
+  tunnelLoading.value = true;
   operationError.value = null;
   send(ipcRouters.TUNNEL.stop);
 };
@@ -330,30 +313,17 @@ const openRdp = (target: { host: string; port: number }) => {
 };
 
 onMounted(() => {
-  on(
-    ipcRouters.AUTH.startLogin,
-    () => {
-      appStore.loginInProgress = true;
-    },
-    code => {
-      loading.value = false;
-      authenticating.value = false;
-      appStore.loginInProgress = false;
-      showOperationError(code, { login: true, toast: true });
-    }
-  );
-  on(
+  listen(
     ipcRouters.TUNNEL.start,
     () => {
-      loading.value = false;
-      send(ipcRouters.TUNNEL.getStatus);
+      tunnelLoading.value = false;
     },
     code => {
-      loading.value = false;
+      tunnelLoading.value = false;
       showOperationError(code);
     }
   );
-  on(
+  listen(
     ipcRouters.TUNNEL.refresh,
     (data: TunnelStatusInfo) => {
       refreshing.value = false;
@@ -362,32 +332,27 @@ onMounted(() => {
     },
     code => {
       refreshing.value = false;
-      showOperationError(code, { toast: true });
+      showOperationError(code);
     }
   );
-  on(
+  listen(
     ipcRouters.TUNNEL.stop,
     () => {
       stopping.value = false;
-      loading.value = false;
+      tunnelLoading.value = false;
       send(ipcRouters.TUNNEL.getStatus);
     },
     code => {
       stopping.value = false;
-      loading.value = false;
-      toastError(code);
+      tunnelLoading.value = false;
+      showOperationError(code);
       /* 中斷失敗時主程序記下原因，馬上拉狀態讓連線卡顯示 */
       send(ipcRouters.TUNNEL.getStatus);
     }
   );
-  on(ipcRouters.TUNNEL.getStatus, (data: TunnelStatusInfo) => {
-    if (data) appStore.tunnelStatus = data;
-  });
   /* 開 SSH／RDP 只在失敗時回饋，用預設的錯誤 toast */
-  on(ipcRouters.SYSTEM.openSsh, () => undefined);
-  on(ipcRouters.SYSTEM.openRdp, () => undefined);
-
-  window.electronIpcRenderer.on("auth:event", authEventHandler);
+  listen(ipcRouters.SYSTEM.openSsh, () => undefined);
+  listen(ipcRouters.SYSTEM.openRdp, () => undefined);
 
   refresh();
   window.addEventListener("online", refreshAfterNetworkRecovery);
@@ -398,14 +363,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  removeRouterListeners(ipcRouters.AUTH.startLogin);
-  removeRouterListeners(ipcRouters.TUNNEL.start);
-  removeRouterListeners(ipcRouters.TUNNEL.stop);
-  removeRouterListeners(ipcRouters.TUNNEL.refresh);
-  removeRouterListeners(ipcRouters.TUNNEL.getStatus);
-  removeRouterListeners(ipcRouters.SYSTEM.openSsh);
-  removeRouterListeners(ipcRouters.SYSTEM.openRdp);
-  window.electronIpcRenderer.removeListener("auth:event", authEventHandler);
+  disposers.forEach(dispose => dispose());
   window.removeEventListener("online", refreshAfterNetworkRecovery);
 });
 </script>
@@ -472,6 +430,13 @@ onUnmounted(() => {
                   : "home.connect.button"
               )
         }}
+      </button>
+      <button
+        v-if="authenticating"
+        class="sl-btn-secondary"
+        @click="appStore.cancelLogin()"
+      >
+        {{ t("login.cancelButton") }}
       </button>
     </section>
 

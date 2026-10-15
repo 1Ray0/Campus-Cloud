@@ -15,9 +15,8 @@ class AuthController extends BaseController {
     this._authService = authService;
   }
 
-  /** 登入結果另走事件推給畫面；失敗只帶錯誤碼，畫面自己翻譯（英文訊息留在記錄檔） */
   private _emitAuthEvent(payload: {
-    type: "login-success" | "login-failure";
+    type: "login-success" | "login-failure" | "login-cancelled";
     errorCode?: string;
   }) {
     const win: BrowserWindow = BeanFactory.getBean("win");
@@ -31,8 +30,10 @@ class AuthController extends BaseController {
       .startLogin((success, error) => {
         if (success) {
           this._emitAuthEvent({ type: "login-success" });
+        } else if (error?.bizCode === "B1003") {
+          this._emitAuthEvent({ type: "login-cancelled" });
         } else {
-          Logger.warn("AuthController.startLogin.result", error?.message ?? "");
+          Logger.warn("AuthController.startLogin.result", error?.message || "");
           this._emitAuthEvent({
             type: "login-failure",
             errorCode: error?.bizCode
@@ -46,6 +47,11 @@ class AuthController extends BaseController {
         Logger.error("AuthController.startLogin", err);
         req.event.reply(req.channel, ResponseUtils.fail(err));
       });
+  }
+
+  cancelLogin(req: ControllerParam) {
+    this._authService.cancelLogin();
+    req.event.reply(req.channel, ResponseUtils.success());
   }
 
   logout(req: ControllerParam) {

@@ -98,6 +98,7 @@ export default {
     doNotShow: "今後表示しない"
   },
   login: {
+    cancelButton: "ログインをキャンセル",
     success: "ログインしました",
     failure: "ログインに失敗しました: {error}"
   },

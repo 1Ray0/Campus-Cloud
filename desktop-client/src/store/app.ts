@@ -8,6 +8,8 @@ import router from "../router";
 interface AppState {
   loggedIn: boolean;
   loginInProgress: boolean;
+  loginErrorCode: string;
+  connectionStarting: boolean;
   language: string;
   autoStart: boolean;
   backendUrl: string;
@@ -51,6 +53,7 @@ let sessionPollTimer: ReturnType<typeof setInterval> | null = null;
 let updatePollTimer: ReturnType<typeof setInterval> | null = null;
 let authExpiryListenerRegistered = false;
 let lastResourceRefreshAt = 0;
+const registeredStores = new WeakSet<object>();
 /** 等登出回覆後才送出的設定（換後端網址時，見 saveSettings） */
 let pendingSettingsPatch: SkyLabSettingsPatch | null = null;
 
@@ -81,6 +84,8 @@ export const useAppStore = defineStore("app", {
   state: (): AppState => ({
     loggedIn: false,
     loginInProgress: false,
+    loginErrorCode: "",
+    connectionStarting: false,
     language: "zh-TW",
     autoStart: false,
     backendUrl: "https://skylab-tw.com",
@@ -117,6 +122,57 @@ export const useAppStore = defineStore("app", {
   },
   actions: {
     registerListeners() {
+      if (registeredStores.has(this)) return;
+      registeredStores.add(this);
+      on(
+        ipcRouters.AUTH.startLogin,
+        () => {},
+        code => {
+          if (!this.loginInProgress) return;
+          this.loginInProgress = false;
+          this.loginErrorCode = code;
+        }
+      );
+      window.electronIpcRenderer.on("auth:event", (_event, response) => {
+        if (response?.bizCode !== "A1000" || !this.loginInProgress) return;
+        const payload = response.data;
+        if (
+          !payload ||
+          !["login-success", "login-failure", "login-cancelled"].includes(
+            payload.type
+          )
+        )
+          return;
+        this.loginInProgress = false;
+        this.loginErrorCode = "";
+        if (payload.type === "login-success") {
+          this.loggedIn = true;
+          this.refreshResources();
+          this.connectionStarting = true;
+          send(ipcRouters.TUNNEL.start);
+        } else if (payload.type === "login-failure") {
+          this.loginErrorCode = payload.errorCode || "B1000";
+        }
+      });
+      on(
+        ipcRouters.TUNNEL.start,
+        () => {
+          this.connectionStarting = false;
+          send(ipcRouters.TUNNEL.getStatus);
+        },
+        code => {
+          this.connectionStarting = false;
+          if (code === NOT_LOGGED_IN) return;
+          this.tunnelStatus = {
+            ...this.tunnelStatus,
+            connectionError: describeError(code),
+            connectionErrorCode: code
+          };
+        }
+      );
+      on(ipcRouters.TUNNEL.getStatus, (data: TunnelStatusInfo) => {
+        if (data) this.tunnelStatus = data;
+      });
       if (!authExpiryListenerRegistered) {
         window.addEventListener("skylab:auth-expired", () => {
           this.handleSessionExpired();
@@ -136,6 +192,8 @@ export const useAppStore = defineStore("app", {
           this.resourcesLoading = false;
           this.resourcesErrorCode = "";
           this.loginInProgress = false;
+          this.loginErrorCode = "";
+          this.connectionStarting = false;
           this.tunnelStatus = { ...DEFAULT_TUNNEL_STATUS };
           this.stopSessionPolling();
           /* 換網址觸發的登出：舊伺服器的通道與 token 都收掉了，現在才存新網址；留在設定頁看結果 */
@@ -284,6 +342,22 @@ export const useAppStore = defineStore("app", {
     refreshAuth() {
       send(ipcRouters.AUTH.getAuthState);
     },
+    startLogin() {
+      if (this.loginInProgress) return;
+      this.loginErrorCode = "";
+      this.tunnelStatus = {
+        ...this.tunnelStatus,
+        connectionError: null,
+        connectionErrorCode: null
+      };
+      this.loginInProgress = true;
+      send(ipcRouters.AUTH.startLogin);
+    },
+    cancelLogin() {
+      this.loginInProgress = false;
+      this.loginErrorCode = "";
+      send(ipcRouters.AUTH.cancelLogin);
+    },
     refreshSettings() {
       send(ipcRouters.SETTINGS.getSettings);
     },
@@ -372,15 +446,18 @@ export const useAppStore = defineStore("app", {
     },
     handleSessionExpired() {
       /* 同時失敗的請求都會走到這裡，只在第一次（還是登入狀態時）提示 */
-      if (this.loggedIn) ElMessage.warning(describeError(NOT_LOGGED_IN));
+      const wasLoggedIn = this.loggedIn;
+      if (wasLoggedIn) ElMessage.warning(describeError(NOT_LOGGED_IN));
       this.loggedIn = false;
       this.loginInProgress = false;
+      this.loginErrorCode = "";
+      this.connectionStarting = false;
       this.resources = [];
       this.quickPracticeSessions = [];
       this.resourcesLoading = false;
       this.resourcesErrorCode = "";
       this.stopSessionPolling();
-      send(ipcRouters.TUNNEL.stop);
+      if (wasLoggedIn) send(ipcRouters.TUNNEL.stop);
       if (router.currentRoute.value.name !== "Home") {
         void router.replace({ name: "Home" });
       }
