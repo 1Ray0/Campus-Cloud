@@ -165,6 +165,7 @@
     empty: "目前沒有任何虛擬機，請至 SkyLab 網頁申請。"
   },
   config: {
+    applying: "正在套用設定…",
     general: "一般",
     server: "伺服器",
     discard: "還原",

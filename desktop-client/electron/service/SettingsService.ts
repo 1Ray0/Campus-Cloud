@@ -1,7 +1,9 @@
-﻿import { app } from "electron";
+import { app } from "electron";
 import Logger from "../core/Logger";
 import GlobalConstant from "../core/GlobalConstant";
-import SettingsRepository from "../repository/SettingsRepository";
+import SettingsRepository, {
+  type SettingsPatch
+} from "../repository/SettingsRepository";
 import BackendUrlUtils, { BackendUrlProblem } from "../utils/BackendUrlUtils";
 
 /* 存檔被擋下時回給畫面的訊息（設定頁會先用同一套規則即時提示，正常不會走到這裡） */
@@ -24,25 +26,15 @@ class SettingsService {
   }
 
   async save(patch: Partial<SkyLabSettings>): Promise<SkyLabSettings> {
-    const current = await this._repo.get();
-    const safePatch: Partial<SkyLabSettings> = {};
+    const safePatch: SettingsPatch = {};
     if (typeof patch.language === "string") safePatch.language = patch.language;
     if (typeof patch.launchAtStartup === "boolean") {
       safePatch.launchAtStartup = patch.launchAtStartup;
     }
-    if (typeof patch.token === "string") safePatch.token = patch.token;
-    if (typeof patch.refreshToken === "string") {
-      safePatch.refreshToken = patch.refreshToken;
-    }
     if (typeof patch.backendUrl === "string") {
-      const backendUrl = this.normalizeBackendUrl(patch.backendUrl);
-      safePatch.backendUrl = backendUrl;
-      if (backendUrl !== current.backendUrl?.replace(/\/$/, "")) {
-        safePatch.token = "";
-        safePatch.refreshToken = "";
-      }
+      safePatch.backendUrl = this.normalizeBackendUrl(patch.backendUrl);
     }
-    const next = await this._repo.save(safePatch);
+    const next = await this._repo.saveSettings(safePatch);
     try {
       // Electron 44 移除了 openAsHidden（原本就只有 macOS 認得）；Windows 的
       // 開機啟動只需要 openAtLogin。
@@ -69,7 +61,7 @@ class SettingsService {
   }
 
   async setToken(token: string): Promise<void> {
-    await this.save({ token });
+    await this._repo.saveTokens({ token });
   }
 
   async getRefreshToken(): Promise<string> {
@@ -77,7 +69,7 @@ class SettingsService {
   }
 
   async setTokens(token: string, refreshToken: string): Promise<void> {
-    await this.save({ token, refreshToken });
+    await this._repo.saveTokens({ token, refreshToken });
   }
 
   async clearTokens(): Promise<void> {

@@ -168,6 +168,7 @@ export default {
       "割り当てられた仮想マシンはありません。SkyLab Web から申請してください。"
   },
   config: {
+    applying: "設定を適用中…",
     general: "一般",
     server: "サーバー",
     discard: "元に戻す",

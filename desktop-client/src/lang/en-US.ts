@@ -166,6 +166,7 @@
     empty: "No virtual machines assigned. Please request one on SkyLab web."
   },
   config: {
+    applying: "Applying settings…",
     general: "General",
     server: "Server",
     discard: "Restore",

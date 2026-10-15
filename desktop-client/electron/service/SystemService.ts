@@ -1,5 +1,6 @@
 ﻿import { spawn } from "child_process";
 import { app, shell } from "electron";
+import { isIP } from "net";
 
 class SystemService {
   /**
@@ -54,12 +55,26 @@ class SystemService {
     user = "root",
     host = "127.0.0.1"
   ): Promise<void> {
+    if (
+      !Number.isInteger(port) ||
+      port < 1 ||
+      port > 65535 ||
+      isIP(host) !== 4 ||
+      !/^[a-z_][a-z0-9_-]*[$]?$/i.test(user)
+    ) {
+      throw new Error("Invalid SSH target");
+    }
     const sshCmd = `ssh -o StrictHostKeyChecking=accept-new -p ${port} ${user}@${host}`;
     if (process.platform === "win32") {
-      await this._spawnDetached("cmd.exe", [
-        "/d",
-        "/k",
-        `title SkyLab SSH - ${host}:${port} & ${sshCmd}`
+      // Start-Process gives CMD its own console and input handle. A detached
+      // CMD with stdio:ignore reads EOF and closes before it can be used.
+      const argumentsText = `/d /k "title SkyLab SSH - ${host}:${port} & ${sshCmd}"`;
+      const script = `$ErrorActionPreference = 'Stop'; Start-Process -FilePath $env:ComSpec -ArgumentList '${argumentsText}' -WindowStyle Normal`;
+      await this._runTerminalLauncher("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        script
       ]);
     } else if (process.platform === "darwin") {
       const script = `tell application "Terminal" to do script "${sshCmd}"`;
@@ -73,6 +88,20 @@ class SystemService {
         stdio: "ignore"
       }).unref();
     }
+  }
+
+  private _runTerminalLauncher(command: string, args: string[]): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(command, args, {
+        windowsHide: true,
+        stdio: "ignore"
+      });
+      child.once("error", reject);
+      child.once("exit", code => {
+        if (code === 0) resolve();
+        else reject(new Error(`SSH terminal launcher exited ${code}`));
+      });
+    });
   }
 
   async openRdp(port: number, host = "127.0.0.1"): Promise<void> {

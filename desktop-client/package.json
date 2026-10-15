@@ -1,6 +1,6 @@
 {
   "name": "SkyLab-connect",
-  "version": "0.2.0-beta.14",
+  "version": "0.2.0-beta.15",
   "main": "dist-electron/main/index.js",
   "description": "SkyLab Connect desktop client",
   "private": true,
@@ -17,7 +17,7 @@
   },
   "scripts": {
     "test:update": "node scripts/test-update.mjs",
-    "test:settings": "node scripts/test-settings.mjs",
+    "test:settings": "node scripts/test-settings.mjs && node scripts/test-settings-concurrency.mjs",
     "test:backend-url": "node scripts/test-backend-url.mjs",
     "test:auth": "node scripts/test-auth-login-url.mjs && node scripts/test-auth.mjs",
     "test:tunnel": "node scripts/test-tunnel.mjs",
@@ -32,7 +32,8 @@
     "preview": "vite preview",
     "lint": "eslint src/ electron/ --ext .ts,.tsx,.vue",
     "lint:fix": "eslint src/ electron/ --ext .ts,.tsx,.vue --fix",
-    "audit:security": "node scripts/audit-security.mjs"
+    "audit:security": "node scripts/audit-security.mjs",
+    "test:system": "node scripts/test-system.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

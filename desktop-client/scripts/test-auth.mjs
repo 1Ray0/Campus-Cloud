@@ -282,3 +282,78 @@ test("cancel and failure leave the renderer ready to retry without duplicate err
   assert.equal(store.loggedIn, false);
   assert.equal(sent.at(-1).channel, ipcRouters.AUTH.cancelLogin.path);
 });
+
+test("rapid auto-applied settings queue the latest choices without reverting the UI", () => {
+  store.saveSettings({ language: "ja" });
+  store.saveSettings({ language: "en-US" });
+  store.saveSettings({ launchAtStartup: true });
+  assert.equal(store.language, "en-US");
+  assert.equal(store.autoStart, true);
+  assert.equal(sent.length, 1);
+  reply(`${ipcRouters.SETTINGS.saveSettings.path}:hook`, {
+    language: "ja",
+    launchAtStartup: false
+  });
+  assert.equal(store.language, "en-US");
+  assert.equal(store.autoStart, true);
+  assert.deepEqual(sent.at(-1).args, {
+    language: "en-US",
+    launchAtStartup: true
+  });
+  reply(`${ipcRouters.SETTINGS.saveSettings.path}:hook`, {
+    language: "en-US",
+    launchAtStartup: true
+  });
+  assert.equal(store.settingsSaving, false);
+  assert.equal(store.queuedSettingsPatch, null);
+  assert.deepEqual(toasts, []);
+});
+
+test("a settings refresh cannot overwrite a selection while it is being saved", () => {
+  store.saveSettings({ language: "ja" });
+  reply(`${ipcRouters.SETTINGS.getSettings.path}:hook`, {
+    language: "zh-TW",
+    launchAtStartup: false
+  });
+  assert.equal(store.language, "ja");
+  reply(`${ipcRouters.SETTINGS.saveSettings.path}:hook`, {
+    language: "ja",
+    launchAtStartup: false
+  });
+});
+
+test("auto-apply failure clears pending changes and reloads persisted settings", () => {
+  store.saveSettings({ language: "ja" });
+  store.saveSettings({ language: "en-US" });
+  reply(`${ipcRouters.SETTINGS.saveSettings.path}:hook`, null, "B1000");
+  assert.equal(store.settingsErrorCode, "B1000");
+  assert.equal(store.settingsSaving, false);
+  assert.equal(store.queuedSettingsPatch, null);
+  assert.equal(sent.at(-1).channel, ipcRouters.SETTINGS.getSettings.path);
+  reply(`${ipcRouters.SETTINGS.getSettings.path}:hook`, {
+    language: "zh-TW",
+    launchAtStartup: false
+  });
+  assert.equal(store.language, "zh-TW");
+});
+
+test("changing servers still logs out before saving and preserves queued language changes", () => {
+  store.loggedIn = true;
+  store.saveSettings({ backendUrl: "https://new.example.org" });
+  assert.equal(sent.at(-1).channel, ipcRouters.AUTH.logout.path);
+  store.saveSettings({ language: "ja" });
+  reply(`${ipcRouters.AUTH.logout.path}:hook`);
+  assert.equal(sent.at(-1).channel, ipcRouters.SETTINGS.saveSettings.path);
+  assert.deepEqual(sent.at(-1).args, { backendUrl: "https://new.example.org" });
+  reply(`${ipcRouters.SETTINGS.saveSettings.path}:hook`, {
+    backendUrl: "https://new.example.org",
+    language: "zh-TW"
+  });
+  assert.equal(store.language, "ja");
+  assert.deepEqual(sent.at(-1).args, { language: "ja" });
+  reply(`${ipcRouters.SETTINGS.saveSettings.path}:hook`, {
+    backendUrl: "https://new.example.org",
+    language: "ja"
+  });
+  assert.equal(store.settingsSaving, false);
+});

@@ -15,6 +15,8 @@ interface AppState {
   backendUrl: string;
   /** 設定存檔進行中（換後端網址時含先登出），設定頁據此停用儲存鈕 */
   settingsSaving: boolean;
+  settingsErrorCode: string;
+  queuedSettingsPatch: SkyLabSettingsPatch | null;
   resourcesLoading: boolean;
   /** 載入資源失敗的錯誤碼（畫面用 describeError 翻譯），空字串＝沒有錯誤 */
   resourcesErrorCode: string;
@@ -90,6 +92,8 @@ export const useAppStore = defineStore("app", {
     autoStart: false,
     backendUrl: "https://skylab-tw.com",
     settingsSaving: false,
+    settingsErrorCode: "",
+    queuedSettingsPatch: null,
     resourcesLoading: false,
     resourcesErrorCode: "",
     updateInfo: null,
@@ -208,13 +212,20 @@ export const useAppStore = defineStore("app", {
           }
         },
         code => {
+          const wasSaving = this.settingsSaving;
           pendingSettingsPatch = null;
           this.settingsSaving = false;
-          toastError(code);
+          this.queuedSettingsPatch = null;
+          if (wasSaving) {
+            this.settingsErrorCode = code;
+            this.refreshSettings();
+          }
+          if (!wasSaving || router.currentRoute.value.name !== "Config")
+            toastError(code);
         }
       );
       on(ipcRouters.SETTINGS.getSettings, data => {
-        if (data) {
+        if (data && !this.settingsSaving) {
           this.language = data.language || "zh-TW";
           this.autoStart = !!data.launchAtStartup;
           this.backendUrl = data.backendUrl || this.backendUrl;
@@ -223,16 +234,22 @@ export const useAppStore = defineStore("app", {
       on(
         ipcRouters.SETTINGS.saveSettings,
         data => {
+          const queued = this.queuedSettingsPatch;
+          this.queuedSettingsPatch = null;
           this.settingsSaving = false;
           if (data) {
-            this.language = data.language || this.language;
-            this.autoStart = !!data.launchAtStartup;
+            this.language = queued?.language || data.language || this.language;
+            this.autoStart = queued?.launchAtStartup ?? !!data.launchAtStartup;
             this.backendUrl = data.backendUrl || this.backendUrl;
           }
+          if (queued) this.saveSettings(queued);
         },
         /* 存檔失敗：設定頁會顯示原因；這裡把先行套用的語言／開機啟動拉回實際存著的值 */
-        () => {
+        code => {
           this.settingsSaving = false;
+          this.settingsErrorCode = code;
+          this.queuedSettingsPatch = null;
+          if (router.currentRoute.value.name !== "Config") toastError(code);
           this.refreshSettings();
         }
       );
@@ -367,12 +384,16 @@ export const useAppStore = defineStore("app", {
      * 反過來的話，主程序存網址時會先清掉 token，登出就看不到 token、不會去停通道。
      */
     saveSettings(patch: SkyLabSettingsPatch) {
-      if (this.settingsSaving) return;
-      this.settingsSaving = true;
       if (patch.language) this.language = patch.language;
       if (typeof patch.launchAtStartup === "boolean") {
         this.autoStart = patch.launchAtStartup;
       }
+      if (this.settingsSaving) {
+        this.queuedSettingsPatch = { ...this.queuedSettingsPatch, ...patch };
+        return;
+      }
+      this.settingsSaving = true;
+      this.settingsErrorCode = "";
       if (patch.backendUrl && (this.loggedIn || this.tunnelStatus.running)) {
         pendingSettingsPatch = patch;
         this.logout();
