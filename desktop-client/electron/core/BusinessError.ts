@@ -19,7 +19,9 @@ enum ResponseCode {
   TUNNEL_CONFIG_CHANGED = "B1015;The WireGuard network configuration changed. Reconnect to apply it.",
   TUNNEL_STOP_FAILED = "B1016;WireGuard tunnel service could not be removed.",
   BACKEND_UNREACHABLE = "B1017;Could not reach the server.",
-  OPEN_FAILED = "B1018;Could not open the requested item."
+  OPEN_FAILED = "B1018;Could not open the requested item.",
+  RDP_REFUSED = "B1019;The machine refused the RDP connection.",
+  RDP_UNREACHABLE = "B1020;The RDP endpoint could not be reached."
 }
 
 /** ResponseCode 的錯誤碼部分，例如 "B1011" */

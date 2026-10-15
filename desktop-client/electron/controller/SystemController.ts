@@ -4,13 +4,18 @@ import { BusinessError, ResponseCode } from "../core/BusinessError";
 import Logger from "../core/Logger";
 import SettingsService from "../service/SettingsService";
 import SystemService from "../service/SystemService";
+import SkyLabService from "../service/SkyLabService";
 import PathUtils from "../utils/PathUtils";
 import ResponseUtils from "../utils/ResponseUtils";
 import BaseController from "./BaseController";
 
 /** 開網址、資料夾、終端機或遠端桌面失敗：畫面統一顯示「無法開啟」，細節留在記錄檔 */
 const openFailed = (err: Error) =>
-  ResponseUtils.fail(new BusinessError(ResponseCode.OPEN_FAILED, err.message));
+  ResponseUtils.fail(
+    err instanceof BusinessError
+      ? err
+      : new BusinessError(ResponseCode.OPEN_FAILED, err.message)
+  );
 
 class SystemController extends BaseController {
   private readonly _systemService: SystemService;
@@ -83,27 +88,30 @@ class SystemController extends BaseController {
       });
   }
 
-  openSsh(req: ControllerParam) {
+  async openSsh(req: ControllerParam) {
     const port = Number(req.args?.port);
     const host = String(req.args?.host || "");
+    const vmid = Number(req.args?.vmid);
     if (
       !Number.isInteger(port) ||
       port <= 0 ||
       port > 65535 ||
-      isIP(host) !== 4
+      isIP(host) !== 4 ||
+      !Number.isSafeInteger(vmid) ||
+      vmid <= 0
     ) {
       req.event.reply(req.channel, openFailed(new Error("invalid target")));
       return;
     }
-    this._systemService
-      .openSsh(port, "root", host)
-      .then(() => {
-        req.event.reply(req.channel, ResponseUtils.success());
-      })
-      .catch((err: Error) => {
-        Logger.error("SystemController.openSsh", err);
-        req.event.reply(req.channel, openFailed(err));
-      });
+    try {
+      const skyLabService: SkyLabService = BeanFactory.getBean("SkyLabService");
+      const alias = await skyLabService.getSshHostAlias(vmid);
+      await this._systemService.openSsh(port, "root", host, alias);
+      req.event.reply(req.channel, ResponseUtils.success());
+    } catch (err) {
+      Logger.error("SystemController.openSsh", err as Error);
+      req.event.reply(req.channel, openFailed(err as Error));
+    }
   }
 
   openRdp(req: ControllerParam) {

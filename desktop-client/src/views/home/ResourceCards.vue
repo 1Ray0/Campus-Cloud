@@ -16,8 +16,8 @@ const props = defineProps<{
   busy: boolean;
 }>();
 const emit = defineEmits<{
-  ssh: [target: { host: string; port: number }];
-  rdp: [target: { host: string; port: number }];
+  ssh: [target: { vmid: number; host: string; port: number }];
+  rdp: [target: { vmid: number; host: string; port: number }];
 }>();
 const { t } = useI18n();
 /* 狀態徽章配色同 web「我的資源」的 STATUS_MAP */
@@ -70,7 +70,11 @@ const reason = (resource: SkyLabResource) => {
 const connect = (resource: SkyLabResource, target: SkyLabTunnelInfo) => {
   if (props.busy || !canConnectResource(resource, target, props.connected))
     return;
-  const destination = { host: String(target.host), port: Number(target.port) };
+  const destination = {
+    vmid: Number(resource.vmid),
+    host: String(target.host),
+    port: Number(target.port)
+  };
   if (isSsh(target)) emit("ssh", destination);
   else emit("rdp", destination);
 };

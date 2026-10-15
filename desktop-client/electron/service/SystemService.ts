@@ -1,6 +1,7 @@
 ﻿import { spawn } from "child_process";
 import { app, shell } from "electron";
-import { isIP } from "net";
+import { createConnection, isIP } from "net";
+import { BusinessError, ResponseCode } from "../core/BusinessError";
 
 class SystemService {
   /**
@@ -53,18 +54,24 @@ class SystemService {
   async openSsh(
     port: number,
     user = "root",
-    host = "127.0.0.1"
+    host = "127.0.0.1",
+    hostKeyAlias?: string
   ): Promise<void> {
     if (
       !Number.isInteger(port) ||
       port < 1 ||
       port > 65535 ||
       isIP(host) !== 4 ||
-      !/^[a-z_][a-z0-9_-]*[$]?$/i.test(user)
+      !/^[a-z_][a-z0-9_-]*[$]?$/i.test(user) ||
+      (hostKeyAlias !== undefined &&
+        !/^skylab-[a-f0-9]{64}$/.test(hostKeyAlias))
     ) {
       throw new Error("Invalid SSH target");
     }
-    const sshCmd = `ssh -o StrictHostKeyChecking=accept-new -p ${port} ${user}@${host}`;
+    const identityOptions = hostKeyAlias
+      ? ` -o HostKeyAlias=${hostKeyAlias} -o CheckHostIP=no`
+      : "";
+    const sshCmd = `ssh -o StrictHostKeyChecking=accept-new${identityOptions} -p ${port} ${user}@${host}`;
     if (process.platform === "win32") {
       // Start-Process gives CMD its own console and input handle. A detached
       // CMD with stdio:ignore reads EOF and closes before it can be used.
@@ -105,6 +112,15 @@ class SystemService {
   }
 
   async openRdp(port: number, host = "127.0.0.1"): Promise<void> {
+    if (
+      !Number.isInteger(port) ||
+      port < 1 ||
+      port > 65535 ||
+      isIP(host) !== 4
+    ) {
+      throw new Error("Invalid RDP target");
+    }
+    await this._checkRdpAvailability(host, port);
     const target = `${host}:${port}`;
     if (process.platform === "win32") {
       await this._spawnDetached("mstsc.exe", [`/v:${target}`]);
@@ -115,6 +131,33 @@ class SystemService {
       return;
     }
     await this._spawnDetached("xfreerdp", [`/v:${target}`]);
+  }
+
+  private _checkRdpAvailability(host: string, port: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const socket = createConnection({ host, port });
+      const finish = (error?: Error) => {
+        socket.removeAllListeners();
+        socket.destroy();
+        if (error) reject(error);
+        else resolve();
+      };
+      socket.setTimeout(5000);
+      socket.once("connect", () => finish());
+      socket.once("timeout", () =>
+        finish(new BusinessError(ResponseCode.RDP_UNREACHABLE))
+      );
+      socket.once("error", (error: NodeJS.ErrnoException) =>
+        finish(
+          new BusinessError(
+            error.code === "ECONNREFUSED"
+              ? ResponseCode.RDP_REFUSED
+              : ResponseCode.RDP_UNREACHABLE,
+            error.message
+          )
+        )
+      );
+    });
   }
 
   private _spawnDetached(command: string, args: string[]): Promise<void> {

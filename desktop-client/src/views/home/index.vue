@@ -23,6 +23,7 @@ defineOptions({ name: "Home" });
 const { t } = useI18n();
 const appStore = useAppStore();
 const tunnelLoading = ref(false);
+const openingConnection = ref(false);
 const authenticating = computed(() => appStore.loginInProgress);
 const loading = computed(
   () =>
@@ -302,13 +303,19 @@ const refreshAfterNetworkRecovery = () => {
   if (appStore.tunnelStatus.running) refresh();
 };
 
-const openSsh = (target: { host: string; port: number }) => {
-  if (loading.value || status.value !== "running") return;
+const openSsh = (target: { vmid: number; host: string; port: number }) => {
+  if (loading.value || openingConnection.value || status.value !== "running")
+    return;
+  openingConnection.value = true;
+  operationError.value = null;
   send(ipcRouters.SYSTEM.openSsh, target);
 };
 
 const openRdp = (target: { host: string; port: number }) => {
-  if (loading.value || status.value !== "running") return;
+  if (loading.value || openingConnection.value || status.value !== "running")
+    return;
+  openingConnection.value = true;
+  operationError.value = null;
   send(ipcRouters.SYSTEM.openRdp, target);
 };
 
@@ -350,9 +357,18 @@ onMounted(() => {
       send(ipcRouters.TUNNEL.getStatus);
     }
   );
-  /* 開 SSH／RDP 只在失敗時回饋，用預設的錯誤 toast */
-  listen(ipcRouters.SYSTEM.openSsh, () => undefined);
-  listen(ipcRouters.SYSTEM.openRdp, () => undefined);
+  for (const route of [ipcRouters.SYSTEM.openSsh, ipcRouters.SYSTEM.openRdp]) {
+    listen(
+      route,
+      () => {
+        openingConnection.value = false;
+      },
+      code => {
+        openingConnection.value = false;
+        showOperationError(code);
+      }
+    );
+  }
 
   refresh();
   window.addEventListener("online", refreshAfterNetworkRecovery);
@@ -533,7 +549,7 @@ onUnmounted(() => {
             :resources="group.resources"
             :tunnels="appStore.tunnelStatus.tunnels"
             :connected="status === 'running'"
-            :busy="loading"
+            :busy="loading || openingConnection"
             :view="resourceView"
             @ssh="openSsh"
             @rdp="openRdp"
@@ -558,7 +574,7 @@ onUnmounted(() => {
             :resources="filteredGroups.personalResources"
             :tunnels="appStore.tunnelStatus.tunnels"
             :connected="status === 'running'"
-            :busy="loading"
+            :busy="loading || openingConnection"
             :view="resourceView"
             @ssh="openSsh"
             @rdp="openRdp"
