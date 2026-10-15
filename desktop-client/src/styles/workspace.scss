@@ -55,7 +55,16 @@
   padding: 4px 10px;
 }
 
-@each $tone, $token in (success: success, info: info, pending: pending, danger: danger, muted: status-neutral) {
+@each $tone,
+  $token
+    in (
+      success: success,
+      info: info,
+      pending: pending,
+      danger: danger,
+      muted: status-neutral
+    )
+{
   .sl-badge--#{$tone} {
     background: color-mix(in srgb, var(--color-#{$token}) 12%, transparent);
     color: var(--color-#{$token});
@@ -88,8 +97,16 @@
 
 @each $tone, $token in (danger: danger, pending: pending) {
   .sl-notice--#{$tone} {
-    border-color: color-mix(in srgb, var(--color-#{$token}) 30%, var(--color-surface));
-    background: color-mix(in srgb, var(--color-#{$token}) 10%, var(--color-surface));
+    border-color: color-mix(
+      in srgb,
+      var(--color-#{$token}) 30%,
+      var(--color-surface)
+    );
+    background: color-mix(
+      in srgb,
+      var(--color-#{$token}) 10%,
+      var(--color-surface)
+    );
     color: var(--color-#{$token});
   }
 }
@@ -357,7 +374,8 @@
   &:focus-within {
     border-color: var(--color-primary);
     background: var(--color-surface);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 12%, transparent);
+    box-shadow: 0 0 0 3px
+      color-mix(in srgb, var(--color-primary) 12%, transparent);
     color: var(--color-primary-on-surface);
   }
 
@@ -445,7 +463,13 @@
 
 .resource-card {
   @include glass-surface;
-  @include flex-column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  grid-template-rows: auto auto 1fr;
+  grid-template-areas:
+    "heading info"
+    "address address"
+    "actions actions";
   gap: 12px;
   min-width: 0;
   padding: 20px;
@@ -454,6 +478,8 @@
 
 .resource-card-heading {
   @include flex-column;
+  grid-area: heading;
+  min-width: 0;
   align-items: flex-start;
   gap: $spacing-8;
 
@@ -467,6 +493,7 @@
 
 /* 內網 IP：玻璃卡裡的內容區塊一律白底細框 */
 .resource-address {
+  grid-area: address;
   width: fit-content;
   max-width: 100%;
   padding: 4px 10px;
@@ -482,24 +509,32 @@
 }
 
 .resource-card-actions {
+  grid-area: actions;
   display: flex;
   flex-wrap: wrap;
+  align-self: end;
   align-items: center;
+  min-width: 0;
   gap: $spacing-8;
   margin-top: auto;
 }
 
 .resource-launch {
   @include btn-secondary;
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: max-content;
 }
 
 .resource-info {
-  margin-left: auto;
+  grid-area: info;
+  align-self: start;
+  justify-self: end;
 }
 
 .resource-unavailable {
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--color-text-muted);
   font-size: $font-size-14;
 
@@ -508,43 +543,79 @@
   }
 }
 
-/* 列表檢視：一列一台，名稱／IP／動作三欄 */
+/* 列表檢視為連線與詳細資料各留一欄，避免文字按鈕把圖示鈕擠出卡片。 */
 .resource-grid--list {
   grid-template-columns: 1fr;
 }
 
 .resource-grid--list .resource-card,
 .resource-card--blocked {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 150px 220px;
+  grid-template-columns: minmax(0, 1fr) 150px 280px 36px;
+  grid-template-rows: auto;
+  grid-template-areas: "heading address actions info";
   align-items: center;
   gap: $spacing-16;
   padding: 14px 20px;
 }
 
+.resource-grid--list .resource-card--blocked,
 .resource-card--blocked {
   grid-column: 1 / -1;
-  grid-template-columns: minmax(0, 1fr) 260px;
+  grid-template-columns: minmax(0, 1fr) 280px 36px;
+  grid-template-areas: "heading actions info";
 
   .resource-address {
     display: none;
   }
 }
 
-/* ── 視窗較窄時的收斂（視窗最小 900px） ── */
-@media (max-width: 1100px) {
+.resource-grid--list .resource-card-actions,
+.resource-card--blocked .resource-card-actions,
+.resource-grid--list .resource-info,
+.resource-card--blocked .resource-info {
+  align-self: center;
+  margin-top: 0;
+}
+
+/* 依實際內容寬度收斂，側欄與資料夾內距也算在內。 */
+@container (max-width: 900px) {
   .resource-grid--list .resource-card {
-    grid-template-columns: minmax(0, 1fr) 220px;
-    gap: 10px;
+    grid-template-columns: minmax(0, 1fr) 280px 36px;
+    grid-template-areas:
+      "heading actions info"
+      "address actions info";
+    gap: 10px 16px;
   }
 
-  .resource-grid--list .resource-address {
-    grid-column: 1;
-    grid-row: 2;
+  .resource-grid--list .resource-card--blocked {
+    grid-template-areas: "heading actions info";
+  }
+}
+
+@container (max-width: 600px) {
+  .resource-grid {
+    grid-template-columns: 1fr;
   }
 
-  .resource-grid--list .resource-card-actions {
-    grid-column: 2;
-    grid-row: 1 / span 2;
+  .resource-grid--list .resource-card,
+  .resource-card--blocked {
+    grid-template-columns: minmax(0, 1fr) 36px;
+    grid-template-areas:
+      "heading info"
+      "address address"
+      "actions actions";
+    gap: 12px;
+  }
+
+  .resource-grid--list .resource-card--blocked,
+  .resource-card--blocked {
+    grid-template-areas:
+      "heading info"
+      "actions actions";
+  }
+
+  .resource-grid--list .resource-info,
+  .resource-card--blocked .resource-info {
+    align-self: start;
   }
 }

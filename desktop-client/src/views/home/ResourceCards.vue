@@ -110,6 +110,15 @@ const date = (value?: string | null) =>
         >
         <h3>{{ resource.name }}</h3>
       </div>
+      <button
+        type="button"
+        class="sl-btn-icon resource-info"
+        :aria-label="t('workspace.detailsFor', { name: resource.name })"
+        :title="t('workspace.details')"
+        @click="showDetails(resource)"
+      >
+        <MIcon name="info" :size="18" />
+      </button>
       <div class="resource-address" data-selectable>
         {{ resource.ip_address || "—" }}
       </div>
@@ -147,15 +156,6 @@ const date = (value?: string | null) =>
           :class="{ 'is-expired': block(resource) === 'window_ended' }"
           >{{ reason(resource) }}</span
         >
-        <button
-          type="button"
-          class="sl-btn-icon resource-info"
-          :aria-label="t('workspace.detailsFor', { name: resource.name })"
-          :title="t('workspace.details')"
-          @click="showDetails(resource)"
-        >
-          <MIcon name="info" :size="18" />
-        </button>
       </div>
     </article>
   </div>
