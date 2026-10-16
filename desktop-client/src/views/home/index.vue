@@ -11,6 +11,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { ipcRouters } from "../../../electron/core/IpcRouter";
 import ResourceCards from "./ResourceCards.vue";
+import RdpHelpDialog from "./RdpHelpDialog.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import LoadingState from "@/components/LoadingState.vue";
 import MIcon from "@/components/MIcon.vue";
@@ -24,6 +25,13 @@ const { t } = useI18n();
 const appStore = useAppStore();
 const tunnelLoading = ref(false);
 const openingConnection = ref(false);
+const rdpErrorCode = ref<string | null>(null);
+const rdpHelpOpen = computed({
+  get: () => rdpErrorCode.value !== null,
+  set: open => {
+    if (!open) rdpErrorCode.value = null;
+  }
+});
 const authenticating = computed(() => appStore.loginInProgress);
 const loading = computed(
   () =>
@@ -365,6 +373,13 @@ onMounted(() => {
       },
       code => {
         openingConnection.value = false;
+        if (
+          route === ipcRouters.SYSTEM.openRdp &&
+          (code === "B1019" || code === "B1020")
+        ) {
+          rdpErrorCode.value = code;
+          return;
+        }
         showOperationError(code);
       }
     );
@@ -614,4 +629,5 @@ onUnmounted(() => {
     </template>
     <EmptyState v-else icon="cloud_off" :title="t('home.empty.notLoggedIn')" />
   </main>
+  <RdpHelpDialog v-model="rdpHelpOpen" :error-code="rdpErrorCode" />
 </template>

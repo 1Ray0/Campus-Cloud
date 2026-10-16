@@ -102,6 +102,15 @@
     failure: "Sign-in failed: {error}"
   },
   home: {
+    rdpHelp: {
+      title: "Remote desktop is unavailable",
+      linux:
+        "If remote desktop is not configured on this Linux machine, connect over SSH to install and enable xrdp yourself. A machine without a desktop environment also needs one, such as Xfce.",
+      windows:
+        "On Windows, enable Remote Desktop in the machine's settings. xrdp is not needed.",
+      retry:
+        "If remote desktop is already configured, check the service and firewall. When ready, select RDP Connect again."
+    },
     status: {
       leaseRefreshFailed:
         "Session renewal failed and will retry automatically. Reconnect if the session expires.",
@@ -269,8 +278,8 @@
       "Can't reach the SkyLab server. Check your network connection, or check the Backend URL in Settings.",
     B1018: "Couldn't open it. Try again. @:errors.support",
     B1019:
-      "The machine refused the RDP connection. Check that its remote desktop service is installed and enabled, or ask an administrator to check the firewall. Ubuntu Server also needs a desktop environment.",
+      "The machine refused the RDP connection. Its remote desktop service may not be enabled.",
     B1020:
-      "Couldn't reach the remote desktop service. Check that the secure connection is established and the machine is running, then ask an administrator to check the RDP service and firewall."
+      "Couldn't reach the machine's RDP port. First check that the machine is running and the secure connection is working."
   }
 };
