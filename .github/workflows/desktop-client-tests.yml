@@ -6,7 +6,7 @@ on:
       - "desktop-client/**"
       - ".github/workflows/desktop-client-tests.yml"
   push:
-    branches: [main]
+    branches: [main, "release/skylab-connect-v*"]
     paths:
       - "desktop-client/**"
       - ".github/workflows/desktop-client-tests.yml"
