@@ -120,12 +120,15 @@ class SystemService {
     ) {
       throw new Error("Invalid RDP target");
     }
-    await this._checkRdpAvailability(host, port);
     const target = `${host}:${port}`;
     if (process.platform === "win32") {
+      // Let the native client handle connection retries and RDP diagnostics.
+      // A short TCP probe can time out while the VPN route is becoming ready
+      // and would prevent mstsc from opening at all.
       await this._spawnDetached("mstsc.exe", [`/v:${target}`]);
       return;
     }
+    await this._checkRdpAvailability(host, port);
     if (process.platform === "darwin") {
       await shell.openExternal(`rdp://full%20address=s:${target}`);
       return;

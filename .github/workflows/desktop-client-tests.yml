@@ -45,6 +45,9 @@ jobs:
       - name: Test tunnel lifecycle
         run: npm run test:tunnel
 
+      - name: Test native connection launchers
+        run: npm run test:system
+
       - name: Test resource access guards
         run: npm run test:resources
 
@@ -53,3 +56,6 @@ jobs:
 
       - name: Production build
         run: npm run build
+
+      - name: Test connection status after operation failures
+        run: npm run test:connection-ui

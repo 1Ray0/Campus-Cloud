@@ -429,7 +429,7 @@ onUnmounted(() => {
 
     <section
       class="connection-banner"
-      :class="{ 'connection-banner--error': !!displayedError }"
+      :class="{ 'connection-banner--error': status === 'error' }"
       :aria-label="t('workspace.connectionInfo')"
       aria-live="polite"
     >

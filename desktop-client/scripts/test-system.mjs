@@ -126,7 +126,7 @@ test(
 );
 
 test(
-  "RDP reaches a listening endpoint before starting the client",
+  "Windows opens the native RDP client with the requested host and port",
   { skip: process.platform !== "win32" },
   async () => {
     const server = createServer(socket => socket.end());
@@ -145,18 +145,74 @@ test(
   }
 );
 
-test("an unavailable RDP service gives a specific error without launching a doomed client", async () => {
-  const server = createServer();
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const port = server.address().port;
-  await new Promise(resolve => server.close(resolve));
-  await assert.rejects(
-    service.openRdp(port),
-    error => error.bizCode === "B1019"
-  );
-  assert.equal(globalThis.__systemTest.calls.length, 0);
-});
+test(
+  "Windows still opens RDP when the endpoint is not yet listening",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const server = createServer();
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const port = server.address().port;
+    await new Promise(resolve => server.close(resolve));
+    await service.openRdp(port);
+    assert.equal(globalThis.__systemTest.calls[0].command, "mstsc.exe");
+    assert.deepEqual(globalThis.__systemTest.calls[0].args, [
+      `/v:127.0.0.1:${port}`
+    ]);
+  }
+);
+
+test(
+  "all valid Windows RDP targets launch without a TCP preflight dependency",
+  { skip: process.platform !== "win32" },
+  async () => {
+    service._checkRdpAvailability = () => {
+      throw new Error("A TCP probe must not block the native Windows client");
+    };
+    for (const [host, port] of [
+      ["192.168.60.113", 3389],
+      ["192.168.1.20", 13389],
+      ["10.20.30.40", 1],
+      ["172.20.1.2", 65535]
+    ]) {
+      await service.openRdp(port, host);
+      const launch = globalThis.__systemTest.calls.at(-1);
+      assert.equal(launch.command, "mstsc.exe");
+      assert.deepEqual(launch.args, [`/v:${host}:${port}`]);
+    }
+  }
+);
+
+test(
+  "Windows reports a native RDP launcher failure",
+  { skip: process.platform !== "win32" },
+  async () => {
+    globalThis.__systemTest.automatic = false;
+    const pending = service.openRdp(3389, "192.168.60.113");
+    globalThis.__systemTest.calls[0].child.emit(
+      "error",
+      new Error("mstsc unavailable")
+    );
+    await assert.rejects(pending, /mstsc unavailable/);
+  }
+);
+
+test(
+  "other platforms report an unavailable RDP service before launching",
+  { skip: process.platform === "win32" },
+  async () => {
+    const server = createServer();
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const port = server.address().port;
+    await new Promise(resolve => server.close(resolve));
+    await assert.rejects(
+      service.openRdp(port),
+      error => error.bizCode === "B1019"
+    );
+    assert.equal(globalThis.__systemTest.calls.length, 0);
+  }
+);
 
 test("invalid RDP destinations cannot reach the network or launcher", async () => {
   for (const args of [[0], [65536], [3389, "127.0.0.1 & whoami"]]) {

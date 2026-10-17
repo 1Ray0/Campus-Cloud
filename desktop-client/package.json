@@ -1,6 +1,6 @@
 {
   "name": "SkyLab-connect",
-  "version": "0.2.0-beta.17",
+  "version": "0.2.0-beta.18",
   "main": "dist-electron/main/index.js",
   "description": "SkyLab Connect desktop client",
   "private": true,
@@ -33,7 +33,8 @@
     "lint": "eslint src/ electron/ --ext .ts,.tsx,.vue",
     "lint:fix": "eslint src/ electron/ --ext .ts,.tsx,.vue --fix",
     "audit:security": "node scripts/audit-security.mjs",
-    "test:system": "node scripts/test-system.mjs && node scripts/test-system-controller.mjs && node scripts/test-ssh-identity.mjs"
+    "test:system": "node scripts/test-system.mjs && node scripts/test-system-controller.mjs && node scripts/test-ssh-identity.mjs",
+    "test:connection-ui": "node scripts/test-connection-ui.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
