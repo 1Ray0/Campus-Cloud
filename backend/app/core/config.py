@@ -52,6 +52,10 @@ class Settings(BaseSettings):
         "https://github.com/SkyLab-tw/SkyLab-Connect/"
         "releases/latest/download/SkyLab-Connect-Setup.exe"
     )
+    DESKTOP_CLIENT_MAC_DOWNLOAD_URL: str = (
+        "https://github.com/SkyLab-tw/SkyLab-Connect/"
+        "releases/latest/download/SkyLab-Connect-mac-universal.dmg"
+    )
     # Desktop VPN control plane. The public endpoint host falls back to the
     # configured Gateway VM host when left empty.
     WIREGUARD_ENDPOINT_HOST: str = ""

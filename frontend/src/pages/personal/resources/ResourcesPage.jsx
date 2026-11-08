@@ -34,7 +34,7 @@ import { QuickPracticeService } from "../../../services/quickPractice";
 import { buildEnvironmentGroups, groupedResourceKeys } from "../../../utils/environmentGroups";
 import * as fmt from "../../../utils/formatDate";
 import { canTeachUser } from "../../../utils/roles";
-import { DESKTOP_CLIENT_DOWNLOAD_URL } from "../../../services/desktopClient";
+import { getDesktopClientDownloadUrl, getDesktopClientPlatform } from "../../../services/desktopClient";
 
 /* ── Constants ── */
 const STATUS_MAP = {
@@ -59,6 +59,14 @@ const TYPE_MAP = {
   lxc:   { labelKey: "ResourcesPage.typeLxc", icon: "terminal" },
   qemu:  { labelKey: "ResourcesPage.typeQemu", icon: "computer" },
 };
+
+const detectedDesktopPlatform = getDesktopClientPlatform();
+const desktopDownloads = (detectedDesktopPlatform ? [detectedDesktopPlatform] : ["windows", "macos"])
+  .map((platform) => ({
+    platform,
+    label: platform === "macos" ? "macOS" : "Windows",
+    url: getDesktopClientDownloadUrl(platform),
+  }));
 
 /* ── Helpers ── */
 function formatDate(isoStr) {
@@ -883,13 +891,16 @@ export default function ResourcesPage() {
     <div className={styles.page}>
       <PageHeader title={t("ResourcesPage.title")}>
         <div className={styles.pageActions}>
-          <a
-            className={styles.btnSecondary}
-            href={DESKTOP_CLIENT_DOWNLOAD_URL}
-          >
-            <MIcon name="download" size={16} />
-            {t("ResourcesPage.downloadDesktopClient")}
-          </a>
+          {desktopDownloads.map((download) => (
+            <a
+              key={download.platform}
+              className={styles.btnSecondary}
+              href={download.url}
+            >
+              <MIcon name="download" size={16} />
+              {t("ResourcesPage.downloadDesktopClient")} ({download.label})
+            </a>
+          ))}
           {showHeaderRequest && (
             <button
               type="button"

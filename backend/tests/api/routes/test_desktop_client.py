@@ -2,7 +2,8 @@ import time
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 from app.api.routes import desktop_client
 from app.core.config import settings
@@ -151,4 +152,55 @@ def test_download_without_url_or_installer_returns_not_found(
     monkeypatch.setattr(desktop_client, "_STATIC_DIR", tmp_path / "missing")
     with pytest.raises(HTTPException) as error:
         desktop_client.download_desktop_client()
+    assert error.value.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "platform,setting,url",
+    [
+        ("windows", "DESKTOP_CLIENT_DOWNLOAD_URL", "https://downloads.example.org/client.exe"),
+        ("macos", "DESKTOP_CLIENT_MAC_DOWNLOAD_URL", "https://downloads.example.org/client.dmg"),
+    ],
+)
+def test_platform_download_redirects_to_matching_installer(monkeypatch, platform, setting, url):
+    monkeypatch.setattr(settings, setting, url)
+    app = FastAPI()
+    app.include_router(desktop_client.router)
+    with TestClient(app) as client:
+        response = client.get(
+            "/desktop-client/download", params={"platform": platform}, follow_redirects=False
+        )
+    assert response.status_code == 302
+    assert response.headers["location"] == url
+
+
+@pytest.mark.parametrize(
+    "platform,setting,filename",
+    [
+        ("windows", "DESKTOP_CLIENT_DOWNLOAD_URL", "SkyLab-Connect-Setup.exe"),
+        ("macos", "DESKTOP_CLIENT_MAC_DOWNLOAD_URL", "SkyLab-Connect-mac-universal.dmg"),
+    ],
+)
+def test_local_download_selects_matching_platform(tmp_path, monkeypatch, platform, setting, filename):
+    _write(tmp_path / "SkyLab-Connect-Setup.exe")
+    _write(tmp_path / "SkyLab-Connect-mac-universal.dmg")
+    monkeypatch.setattr(desktop_client, "_STATIC_DIR", tmp_path)
+    monkeypatch.setattr(settings, setting, "")
+    response = desktop_client.download_desktop_client(platform)
+    assert response.filename == filename
+
+
+@pytest.mark.parametrize(
+    "platform,setting,wrong_installer",
+    [
+        ("windows", "DESKTOP_CLIENT_DOWNLOAD_URL", "SkyLab-Connect-mac-universal.dmg"),
+        ("macos", "DESKTOP_CLIENT_MAC_DOWNLOAD_URL", "SkyLab-Connect-Setup.exe"),
+    ],
+)
+def test_platform_download_does_not_serve_other_platform(tmp_path, monkeypatch, platform, setting, wrong_installer):
+    _write(tmp_path / wrong_installer)
+    monkeypatch.setattr(desktop_client, "_STATIC_DIR", tmp_path)
+    monkeypatch.setattr(settings, setting, "")
+    with pytest.raises(HTTPException) as error:
+        desktop_client.download_desktop_client(platform)
     assert error.value.status_code == 404
